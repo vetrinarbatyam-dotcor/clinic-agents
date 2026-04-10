@@ -1,0 +1,294 @@
+/**
+ * marpet-reminder/src/index.ts
+ * Main runner for the Marpet vaccination reminder agent.
+ *
+ * Usage:
+ *   bun run marpet-reminder/src/index.ts --dry-run           # print what would be sent
+ *   bun run marpet-reminder/src/index.ts --discover-tz       # scan Marpet history to build TZ map
+ *   bun run marpet-reminder/src/index.ts --force-refresh-tz  # ignore cached TZ, re-fetch
+ */
+
+import 'dotenv/config';
+import { getAgent, insertPendingMessage } from '../../shared/supabase';
+import { sendWhatsApp } from '../../shared/whatsapp';
+import { loginMarpet, fetchEligibilityForOwner, getSessionCookie } from './marpet-scraper';
+import { getRecentClients, getOrFetchTzMapping, closePool } from './clinica-tz-mapper';
+import {
+  filterEligibleVaccines,
+  checkCooldown,
+  checkMonthlyCap,
+  logSent,
+  DEFAULT_CONFIG,
+} from './eligibility-logic';
+import { buildMessage, buildMultiPetMessage } from './message-builder';
+import { supabase } from '../../shared/supabase';
+
+const DRY_RUN = process.argv.includes('--dry-run');
+const FORCE_REFRESH_TZ = process.argv.includes('--force-refresh-tz');
+const DISCOVER_TZ = process.argv.includes('--discover-tz');
+const GIL_PHONE = '0543123419';
+const AGENT_NAME = 'marpet-reminder';
+
+// Parse optional --limit N argument
+function getLimit(): number | null {
+  const idx = process.argv.indexOf('--limit');
+  if (idx !== -1 && process.argv[idx + 1]) return parseInt(process.argv[idx + 1]) || null;
+  return null;
+}
+
+async function runDiscoverTz() {
+  console.log('\n[marpet] === מצב גילוי ת"ז ===');
+  console.log('[marpet] סורק היסטוריית מרפט לאיתור ת"ז בעלים...');
+
+  await loginMarpet();
+  const { setMarpetSession, fetchMarpetClients } = await import('./marpet-tz-discovery');
+  setMarpetSession(getSessionCookie());
+
+  // Scan last 12 months in monthly windows (history_list caps at ~99 per request)
+  const endDate = new Date();
+  let found = 0;
+
+  for (let monthBack = 0; monthBack < 12; monthBack++) {
+    const to = new Date(endDate);
+    to.setMonth(to.getMonth() - monthBack);
+    const from = new Date(to);
+    from.setMonth(from.getMonth() - 1);
+
+    const fromStr = from.toISOString().split('T')[0];
+    const toStr = to.toISOString().split('T')[0];
+
+    process.stdout.write(`\r[marpet] Scanning ${fromStr} to ${toStr}...`);
+
+    const clients = await fetchMarpetClients(fromStr, toStr);
+    for (const c of clients) {
+      if (!c.ownerTz || c.ownerTz.length !== 9) continue;
+
+      // Store in Supabase cache with pet_id as client_id
+      const { error } = await supabase.from('marpet_owner_map').upsert({
+        client_id: `marpet_${c.petId}`,
+        owner_tz: c.ownerTz,
+        found_via: 'marpet_discovery',
+        last_verified: new Date().toISOString(),
+      }, { onConflict: 'client_id' });
+
+      if (!error) found++;
+    }
+  }
+
+  process.stdout.write('\n');
+  console.log(`[marpet] גילוי הושלם. נמצאו ${found} רשומות ת"ז.`);
+  console.log('[marpet] הרץ כעת ללא --discover-tz לשליחת התזכורות.');
+}
+
+async function run() {
+  console.log(`\n[marpet] === מרפט רמיינדר ${DRY_RUN ? '(DRY RUN)' : ''} ===`);
+  console.log(`[marpet] ${new Date().toLocaleString('he-IL')}\n`);
+
+  if (DISCOVER_TZ) {
+    await runDiscoverTz();
+    await closePool();
+    return;
+  }
+
+  const agent = await getAgent(AGENT_NAME);
+  if (!agent) {
+    console.error('[marpet] Agent not found in DB. Run migration SQL first.');
+    process.exit(1);
+  }
+  if (!agent.is_active) {
+    console.log('[marpet] Agent is disabled. Exiting.');
+    return;
+  }
+
+  const rawConfig = agent.config || {};
+  const config = {
+    ...DEFAULT_CONFIG,
+    triggerMode: rawConfig.triggerMode ?? DEFAULT_CONFIG.triggerMode,
+    daysBeforeEligible: rawConfig.daysBeforeEligible ?? DEFAULT_CONFIG.daysBeforeEligible,
+    cooldownDays: rawConfig.cooldownDays ?? DEFAULT_CONFIG.cooldownDays,
+    maxPerOwnerPerMonth: rawConfig.maxPerOwnerPerMonth ?? DEFAULT_CONFIG.maxPerOwnerPerMonth,
+    approvalMode: rawConfig.approvalMode ?? DEFAULT_CONFIG.approvalMode,
+    messageTemplate: rawConfig.messageTemplate ?? null,
+  };
+
+  console.log(`[marpet] Config: mode=${config.triggerMode}, cooldown=${config.cooldownDays}d, cap=${config.maxPerOwnerPerMonth}/month`);
+
+  // Step 1: Load clients
+  console.log('\n[marpet] Step 1: Loading recent clients (last 12 months)...');
+  const allClients = await getRecentClients();
+  const limit = getLimit();
+  const clients = limit ? allClients.slice(0, limit) : allClients;
+  console.log(`[marpet] Found ${clients.length} clients${limit ? ` (limited to ${limit})` : ''}`);
+
+  if (clients.length === 0) {
+    console.log('[marpet] No clients found. Exiting.');
+    await closePool();
+    return;
+  }
+
+  // Step 2: Map client -> TZ
+  console.log('\n[marpet] Step 2: Resolving TZ mappings...');
+  let tzFound = 0, tzMissing = 0;
+  const tzToClient = new Map<string, { name: string; phone: string; tz: string }>();
+
+  for (let i = 0; i < clients.length; i++) {
+    const client = clients[i];
+    if (i % 50 === 0) process.stdout.write(`\r[marpet] TZ lookup ${i}/${clients.length}...`);
+
+    if (FORCE_REFRESH_TZ) {
+      await supabase.from('marpet_owner_map').delete().eq('client_id', client.clientId);
+    }
+    const mapping = await getOrFetchTzMapping(client.clientId, client.patientId);
+    if (mapping && !tzToClient.has(mapping.ownerTz)) {
+      tzFound++;
+      tzToClient.set(mapping.ownerTz, { name: client.name, phone: client.phone, tz: mapping.ownerTz });
+    } else if (!mapping) {
+      tzMissing++;
+    }
+  }
+
+  process.stdout.write('\n');
+  console.log(`[marpet] TZ resolved: ${tzFound} found, ${tzMissing} missing (no IDNumber in ClinicaOnline)`);
+
+  if (tzToClient.size === 0) {
+    console.log('\n[marpet] אין מיפויי ת"ז. הצעות:');
+    console.log('  1. הרץ עם --discover-tz כדי לסרוק את Marpet history');
+    console.log('  2. ודא שיש IDNumber ב-ClinicaOnline עבור לקוחות מרפט');
+    await closePool();
+    return;
+  }
+
+  // Step 3: Login to Marpet
+  console.log('\n[marpet] Step 3: Logging in to Marpet...');
+  await loginMarpet();
+
+  // Step 4: Fetch eligibility + apply rules
+  console.log('\n[marpet] Step 4: Fetching eligibility...');
+  const pendingMessages: Array<{ ownerName: string; ownerPhone: string; petName: string; vaccines: string }> = [];
+  const skipped: string[] = [];
+  let marpetNotFound = 0;
+  let processed = 0;
+  const total = tzToClient.size;
+
+  for (const [tz, client] of tzToClient) {
+    processed++;
+    process.stdout.write(`\r[marpet] Processing ${processed}/${total} (${client.name})...`);
+
+    const capped = await checkMonthlyCap(tz, config.maxPerOwnerPerMonth);
+    if (capped) { skipped.push(`${client.name} -- monthly cap`); continue; }
+
+    let marpetResult;
+    try {
+      marpetResult = await fetchEligibilityForOwner(tz);
+    } catch (e: any) {
+      skipped.push(`${client.name} -- Marpet error: ${e.message}`);
+      continue;
+    }
+
+    if (!marpetResult || marpetResult.pets.length === 0) { marpetNotFound++; continue; }
+
+    // Store eligibility in Supabase (skip in dry-run)
+    if (!DRY_RUN) {
+      for (const pet of marpetResult.pets) {
+        for (const vac of pet.vaccines) {
+          await supabase.from('marpet_eligibility').upsert({
+            pet_name: pet.petName,
+            owner_tz: tz,
+            vaccine_name: vac.name,
+            status: vac.eligible ? 'eligible' : 'not-eligible',
+            next_date: vac.nextDate || null,
+            fetched_at: marpetResult.fetchedAt,
+          }, { onConflict: 'owner_tz,pet_name,vaccine_name' });
+        }
+      }
+    }
+
+    const eligibleVaccines = filterEligibleVaccines(marpetResult.pets, config);
+    if (eligibleVaccines.length === 0) continue;
+
+    const filteredVaccines = [];
+    for (const ev of eligibleVaccines) {
+      const inCooldown = await checkCooldown(tz, ev.petName, ev.vaccineName, config.cooldownDays);
+      if (!inCooldown) filteredVaccines.push(ev);
+    }
+    if (filteredVaccines.length === 0) { skipped.push(`${client.name} -- all in cooldown`); continue; }
+
+    const petNames = [...new Set(filteredVaccines.map(v => v.petName))];
+    const isMultiPet = petNames.length > 1;
+
+    const message = isMultiPet
+      ? buildMultiPetMessage({ ownerName: client.name, eligibleVaccines: filteredVaccines, templateOverride: config.messageTemplate })
+      : buildMessage({ ownerName: client.name, petName: petNames[0], eligibleVaccines: filteredVaccines, templateOverride: config.messageTemplate });
+
+    const vaccinesSummary = filteredVaccines.map(v => `${v.petName}:${v.vaccineName}`).join(', ');
+    const petLabel = isMultiPet ? petNames.join(', ') : petNames[0];
+
+    if (DRY_RUN) {
+      console.log(`\n--- DRY RUN ---`);
+      console.log(`To: ${client.name} (${client.phone}) | TZ: ${tz}`);
+      console.log(`Pets: ${petLabel} | Vaccines: ${vaccinesSummary}`);
+      console.log(`Message:\n${message}`);
+      console.log(`---------------`);
+      continue;
+    }
+
+    await insertPendingMessage({
+      agent_id: agent.id,
+      client_name: client.name,
+      client_phone: client.phone,
+      pet_name: petLabel,
+      category: 'marpet-vaccine' as any,
+      message_text: message,
+      status: 'pending',
+      approved_by: null,
+      sent_at: null,
+    });
+
+    for (const v of filteredVaccines) {
+      await logSent(tz, v.petName, v.vaccineName);
+    }
+
+    pendingMessages.push({ ownerName: client.name, ownerPhone: client.phone, petName: petLabel, vaccines: vaccinesSummary });
+  }
+
+  process.stdout.write('\n');
+
+  console.log(`\n[marpet] === סיכום ===`);
+  console.log(`[marpet] עובד: ${processed} בעלים`);
+  console.log(`[marpet] לא נמצא במרפט: ${marpetNotFound}`);
+  console.log(`[marpet] דולגו: ${skipped.length}`);
+  if (skipped.length > 0) skipped.slice(0, 10).forEach(s => console.log(`  - ${s}`));
+
+  if (DRY_RUN) {
+    console.log('\n[marpet] Dry run complete.');
+    await closePool();
+    return;
+  }
+
+  console.log(`[marpet] הודעות ממתינות לאישור: ${pendingMessages.length}`);
+
+  if (pendingMessages.length > 0) {
+    const lines = pendingMessages.slice(0, 15).map((m, i) =>
+      `${i + 1}. ${m.ownerName} (${m.ownerPhone}) -- ${m.petName}: ${m.vaccines}`
+    );
+    const summary = [
+      `💉 מרפט רמיינדר -- ${new Date().toLocaleDateString('he-IL')}`,
+      '',
+      `⏳ ממתינות לאישור: ${pendingMessages.length}`,
+      '',
+      ...lines,
+      '',
+      `👉 לאישור: http://167.86.69.208:3000`,
+    ].join('\n');
+    const result = await sendWhatsApp(GIL_PHONE, summary);
+    console.log(`[marpet] הסיכום נשלח לגיל: ${result.sent ? 'OK' : result.error}`);
+  }
+
+  console.log('[marpet] Done!');
+  await closePool();
+}
+
+run().catch(e => {
+  console.error('[marpet] Fatal error:', e);
+  process.exit(1);
+});

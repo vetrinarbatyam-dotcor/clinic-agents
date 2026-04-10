@@ -1,0 +1,13 @@
+{
+  "name": "appointment-reminder",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "scan": "bun src/scanner.ts",
+    "scan:dry": "bun src/scanner.ts --dry-run",
+    "webhook": "bun src/webhook.ts"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}

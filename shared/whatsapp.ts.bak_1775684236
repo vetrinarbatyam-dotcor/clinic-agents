@@ -1,0 +1,30 @@
+const GREEN_API_URL = process.env.GREEN_API_URL || '';
+const INSTANCE = process.env.GREEN_API_INSTANCE || '';
+const TOKEN = process.env.GREEN_API_TOKEN || '';
+
+function formatPhone(phone: string): string {
+  let clean = phone.replace(/[\s\-\+\(\)]/g, '');
+  if (clean.startsWith('0')) clean = '972' + clean.slice(1);
+  if (!clean.endsWith('@c.us')) clean += '@c.us';
+  return clean;
+}
+
+export async function sendWhatsApp(phone: string, message: string): Promise<{ sent: boolean; id?: string; error?: string }> {
+  const chatId = formatPhone(phone);
+  const url = `${GREEN_API_URL}/waInstance${INSTANCE}/sendMessage/${TOKEN}`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatId, message }),
+    });
+    const data = await res.json();
+    if (data.idMessage) {
+      return { sent: true, id: data.idMessage };
+    }
+    return { sent: false, error: JSON.stringify(data) };
+  } catch (e: any) {
+    return { sent: false, error: e.message };
+  }
+}

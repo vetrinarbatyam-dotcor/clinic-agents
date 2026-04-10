@@ -1,0 +1,390 @@
+#!/usr/bin/env bun
+/**
+ * Debt Agent — Weekly debt tracking for Pet Care clinic
+ *
+ * Flow:
+ * 1. Login to ClinicaOnline, fetch all clinic debts (GetClinicDebts)
+ * 2. Compare to DB — identify new debts, changed amounts
+ * 3. Save/update in Postgres (debts + debt_history)
+ * 4. Run escalation logic — decide who gets a reminder
+ * 5. Auto-send level 1-2, queue level 3+ for Gil approval
+ * 6. Send WhatsApp summary to Gil
+ * 7. Generate Excel report
+ */
+
+import 'dotenv/config';
+import pg from 'pg';
+import { callAsmx, getIsraelDate } from '../../shared/clinica';
+import { sendWhatsApp } from '../../shared/whatsapp';
+import {
+  getConfig,
+  getExcludedUserIds,
+  getLastReminderLevel,
+  calculateEscalation,
+  type DebtRecord,
+  type EscalationDecision,
+} from './escalation';
+import { renderTemplate, type DebtTemplateVars } from './templates';
+
+const DRY_RUN = process.argv.includes('--dry-run');
+
+function parseClinicaDate(dateStr: string): string | null {
+  if (!dateStr) return null;
+  // Handle DD/MM/YYYY, D/M/YYYY, DD/M/YYYY etc.
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) return null;
+  const [d, m, y] = parts;
+  const day = d.padStart(2, '0');
+  const month = m.padStart(2, '0');
+  return `${y}-${month}-${day}`;
+}
+const FORCE = process.argv.includes('--force');
+
+const pool = new pg.Pool({
+  host: process.env.DB_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT || '5432'),
+  database: process.env.DB_NAME || 'clinicpal',
+  user: process.env.DB_USER || 'clinicpal_user',
+  password: process.env.DB_PASSWORD || 'clinicpal2306',
+});
+
+// ============ Step 1: Fetch debts from ClinicaOnline ============
+
+async function fetchClinicDebts(): Promise<any[]> {
+  console.log('[debt-agent] Fetching clinic debts from ClinicaOnline...');
+
+  const data = await callAsmx('GetClinicDebts', {
+    Branch: 0,
+    MinAmount: 0,
+    City: '',
+    Type: 1, // Clients with debt
+    CustNumber: 0,
+    addOrSubstract: 0,
+    fromDate: '',
+    toDate: '',
+  });
+
+  if (!Array.isArray(data)) {
+    console.error('[debt-agent] Unexpected response format:', typeof data);
+    return [];
+  }
+
+  console.log(`[debt-agent] Got ${data.length} debt records from ClinicaOnline`);
+  return data;
+}
+
+// ============ Step 2-3: Sync debts to Postgres ============
+
+async function syncDebts(clinicaDebts: any[], minDebt: number): Promise<{
+  newDebts: DebtRecord[];
+  changedDebts: DebtRecord[];
+  resolvedCount: number;
+  totalDebt: number;
+}> {
+  console.log('[debt-agent] Syncing debts to database...');
+
+  const filtered = clinicaDebts.filter(d => {
+    const amount = parseFloat(d.ClientDebt || d.Balance || d.Debt || 0);
+    return amount >= minDebt;
+  });
+
+  // Get current DB state
+  const { rows: existingDebts } = await pool.query('SELECT * FROM debts WHERE resolved_at IS NULL');
+  const existingMap = new Map(existingDebts.map((d: any) => [d.user_id, d]));
+
+  const clinicaUserIds = new Set<string>();
+  const newDebts: DebtRecord[] = [];
+  const changedDebts: DebtRecord[] = [];
+  let totalDebt = 0;
+
+  for (const record of filtered) {
+    const userId = record.UserID || record.UserId || record.CustNumber?.toString() || '';
+    if (!userId) continue;
+
+    clinicaUserIds.add(userId);
+    const amount = parseFloat(record.ClientDebt || record.Balance || record.Debt || 0);
+    totalDebt += amount;
+
+    const firstName = record.FirstName || '';
+    const lastName = record.LastName || '';
+    const phone = record.Phone || '';
+    const cellPhone = record.CellPhone || '';
+    const email = record.Email || '';
+    const city = record.City || '';
+    const custNumber = record.CustNumber || record.NumCust || null;
+    const rawVisit = record.LastVisit || null;
+    // Convert DD/MM/YYYY or D/M/YYYY to YYYY-MM-DD for Postgres
+    const lastVisit = rawVisit ? parseClinicaDate(rawVisit) : null;
+    const petNames = record.PetsList || '';
+
+    const existing = existingMap.get(userId);
+
+    if (!existing) {
+      // New debt
+      await pool.query(
+        `INSERT INTO debts (user_id, cust_number, first_name, last_name, phone, cell_phone, email, city, amount, last_visit, pet_names)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (user_id) DO UPDATE SET
+           amount = $9, first_name = $3, last_name = $4, phone = $5, cell_phone = $6,
+           email = $7, city = $8, last_visit = $10, pet_names = $11,
+           resolved_at = NULL, updated_at = NOW()`,
+        [userId, custNumber, firstName, lastName, phone, cellPhone, email, city, amount, lastVisit, petNames]
+      );
+
+      await pool.query(
+        'INSERT INTO debt_history (user_id, amount, previous_amount) VALUES ($1, $2, $3)',
+        [userId, amount, 0]
+      );
+
+      const { rows } = await pool.query('SELECT * FROM debts WHERE user_id = $1', [userId]);
+      if (rows[0]) newDebts.push(rows[0] as DebtRecord);
+    } else if (Math.abs(existing.amount - amount) > 0.01) {
+      // Amount changed
+      await pool.query(
+        `UPDATE debts SET amount = $1, last_visit = $2, pet_names = $3,
+         first_name = $4, last_name = $5, phone = $6, cell_phone = $7, updated_at = NOW()
+         WHERE user_id = $8`,
+        [amount, lastVisit, petNames, firstName, lastName, phone, cellPhone, userId]
+      );
+
+      await pool.query(
+        'INSERT INTO debt_history (user_id, amount, previous_amount) VALUES ($1, $2, $3)',
+        [userId, amount, existing.amount]
+      );
+
+      const { rows } = await pool.query('SELECT * FROM debts WHERE user_id = $1', [userId]);
+      if (rows[0]) changedDebts.push(rows[0] as DebtRecord);
+    } else {
+      // Update metadata only
+      await pool.query(
+        `UPDATE debts SET last_visit = $1, pet_names = $2, first_name = $3, last_name = $4,
+         phone = $5, cell_phone = $6, updated_at = NOW() WHERE user_id = $7`,
+        [lastVisit, petNames, firstName, lastName, phone, cellPhone, userId]
+      );
+    }
+  }
+
+  // Resolve debts that no longer appear in ClinicaOnline
+  let resolvedCount = 0;
+  for (const existing of existingDebts) {
+    if (!clinicaUserIds.has(existing.user_id)) {
+      await pool.query(
+        'UPDATE debts SET resolved_at = NOW(), updated_at = NOW() WHERE user_id = $1',
+        [existing.user_id]
+      );
+      resolvedCount++;
+    }
+  }
+
+  console.log(`[debt-agent] Sync: ${newDebts.length} new, ${changedDebts.length} changed, ${resolvedCount} resolved`);
+  return { newDebts, changedDebts, resolvedCount, totalDebt };
+}
+
+// ============ Step 4-5: Escalation + Send reminders ============
+
+async function processEscalations(config: Record<string, string>): Promise<{
+  autoSent: EscalationDecision[];
+  queued: EscalationDecision[];
+  skipped: number;
+}> {
+  console.log('[debt-agent] Processing escalations...');
+
+  const excludedIds = await getExcludedUserIds(pool);
+  const maxAutoLevel = parseInt(config.max_auto_level || '2');
+
+  const { rows: activeDebts } = await pool.query(
+    'SELECT * FROM debts WHERE resolved_at IS NULL AND is_excluded = FALSE AND amount >= $1 ORDER BY amount DESC',
+    [parseFloat(config.min_debt || '50')]
+  );
+
+  const autoSent: EscalationDecision[] = [];
+  const queued: EscalationDecision[] = [];
+  let skipped = 0;
+
+  for (const debt of activeDebts as DebtRecord[]) {
+    if (excludedIds.has(debt.user_id)) {
+      skipped++;
+      continue;
+    }
+
+    const phone = debt.cell_phone || debt.phone;
+    if (!phone || phone.length < 9) {
+      skipped++;
+      continue;
+    }
+
+    const { level: lastLevel, sentAt: lastSentAt } = await getLastReminderLevel(pool, debt.user_id);
+    const decision = calculateEscalation(debt, lastLevel, lastSentAt, maxAutoLevel, config);
+
+    if (!decision) continue;
+
+    const templateVars: DebtTemplateVars = {
+      clientName: `${debt.first_name} ${debt.last_name}`.trim(),
+      petName: debt.pet_names || '',
+      amount: debt.amount,
+      visitDate: debt.last_visit || '',
+      clinicPhone: config.clinic_phone || '03-XXXXXXX',
+      bankDetails: config.bank_details || '',
+    };
+
+    const messageText = renderTemplate(decision.newLevel, templateVars);
+
+    if (decision.autoSend && !DRY_RUN) {
+      // Auto-send levels 1-2
+      const result = await sendWhatsApp(phone, messageText);
+
+      await pool.query(
+        `INSERT INTO debt_reminders (user_id, client_name, client_phone, amount, escalation_level, message_text, status, sent_at, whatsapp_msg_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [debt.user_id, templateVars.clientName, phone, debt.amount, decision.newLevel,
+         messageText, result.sent ? 'sent' : 'pending', result.sent ? new Date() : null, result.id || null]
+      );
+
+      await pool.query(
+        'UPDATE debts SET escalation_level = $1, updated_at = NOW() WHERE user_id = $2',
+        [decision.newLevel, debt.user_id]
+      );
+
+      autoSent.push(decision);
+      console.log(`[debt-agent] Auto-sent level ${decision.newLevel} to ${templateVars.clientName} (${phone})`);
+    } else {
+      // Queue for Gil approval (level 3+) or dry run
+      await pool.query(
+        `INSERT INTO debt_reminders (user_id, client_name, client_phone, amount, escalation_level, message_text, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending')`,
+        [debt.user_id, templateVars.clientName, phone, debt.amount, decision.newLevel, messageText]
+      );
+
+      // Also insert into pending_messages for the shared dashboard
+      const { rows: agentRows } = await pool.query("SELECT id FROM agents WHERE name = 'debt-agent'");
+      if (agentRows[0]) {
+        const supabaseModule = await import('../../shared/supabase');
+        await supabaseModule.insertPendingMessage({
+          agent_id: agentRows[0].id,
+          client_name: templateVars.clientName,
+          client_phone: phone,
+          pet_name: debt.pet_names || '',
+          category: 'medical' as any,
+          message_text: messageText,
+          status: 'pending',
+          approved_by: null,
+          sent_at: null,
+        });
+      }
+
+      queued.push(decision);
+      console.log(`[debt-agent] Queued level ${decision.newLevel} for ${templateVars.clientName} (needs approval)`);
+    }
+  }
+
+  console.log(`[debt-agent] Escalation: ${autoSent.length} auto-sent, ${queued.length} queued, ${skipped} skipped`);
+  return { autoSent, queued, skipped };
+}
+
+// ============ Step 6: WhatsApp summary to Gil ============
+
+async function sendSummaryToGil(
+  config: Record<string, string>,
+  syncResult: { newDebts: DebtRecord[]; changedDebts: DebtRecord[]; resolvedCount: number; totalDebt: number },
+  escalationResult: { autoSent: EscalationDecision[]; queued: EscalationDecision[]; skipped: number },
+): Promise<void> {
+  const today = getIsraelDate();
+  const dateStr = `${today.getDate().toString().padStart(2, '0')}/${(today.getMonth() + 1).toString().padStart(2, '0')}/${today.getFullYear()}`;
+
+  // Get top 5 debtors
+  const { rows: top5 } = await pool.query(
+    'SELECT first_name, last_name, amount FROM debts WHERE resolved_at IS NULL ORDER BY amount DESC LIMIT 5'
+  );
+
+  const { rows: stats } = await pool.query(
+    `SELECT COUNT(*) as total_clients, SUM(amount) as total_debt,
+            AVG(amount) as avg_debt,
+            COUNT(*) FILTER (WHERE amount >= 500) as over_500,
+            COUNT(*) FILTER (WHERE amount >= 1000) as over_1000
+     FROM debts WHERE resolved_at IS NULL`
+  );
+  const s = stats[0] || {};
+
+  const top5Lines = top5.map((r: any, i: number) =>
+    `${i + 1}. ${r.first_name} ${r.last_name} — ₪${Math.round(r.amount).toLocaleString()}`
+  ).join('\n');
+
+  let msg = `📋 דוח חובות שבועי — ${dateStr}${DRY_RUN ? ' [DRY RUN]' : ''}
+
+💰 סה"כ חוב פתוח: ₪${Math.round(syncResult.totalDebt).toLocaleString()}
+👥 לקוחות חייבים: ${s.total_clients || 0}
+🔴 מעל ₪1,000: ${s.over_1000 || 0}
+🟡 מעל ₪500: ${s.over_500 || 0}
+
+🏆 TOP 5:
+${top5Lines}`;
+
+  if (syncResult.newDebts.length > 0) {
+    msg += `\n\n🆕 חובות חדשים השבוע: ${syncResult.newDebts.length}`;
+  }
+  if (syncResult.resolvedCount > 0) {
+    msg += `\n✅ חובות שנפרעו: ${syncResult.resolvedCount}`;
+  }
+  if (escalationResult.autoSent.length > 0) {
+    msg += `\n📤 תזכורות שנשלחו אוטומטית: ${escalationResult.autoSent.length}`;
+  }
+  if (escalationResult.queued.length > 0) {
+    msg += `\n⏳ ממתינות לאישורך: ${escalationResult.queued.length}`;
+    msg += `\n👉 http://167.86.69.208:3000/debts`;
+  }
+
+  const gilPhone = config.gil_phone || '972543123419';
+
+  if (DRY_RUN) {
+    console.log('[debt-agent] [DRY RUN] WhatsApp summary:\n' + msg);
+  } else {
+    const result = await sendWhatsApp(gilPhone, msg);
+    console.log(`[debt-agent] Summary sent to Gil: ${result.sent ? 'OK' : result.error}`);
+  }
+}
+
+// ============ Main ============
+
+async function main() {
+  console.log(`[debt-agent] Starting${DRY_RUN ? ' (DRY RUN)' : ''}...`);
+  const startTime = Date.now();
+
+  try {
+    // Load config
+    const config = await getConfig(pool);
+    const minDebt = parseFloat(config.min_debt || '50');
+
+    // Step 1: Fetch from ClinicaOnline
+    const clinicaDebts = await fetchClinicDebts();
+    if (clinicaDebts.length === 0) {
+      console.error('[debt-agent] No debts returned — possible API error');
+      await sendWhatsApp(config.gil_phone || '972543123419',
+        '⚠️ סוכן גבייה: לא הצליח לשלוף חובות מ-ClinicaOnline. צריך בדיקה.');
+      process.exit(1);
+    }
+
+    // Steps 2-3: Sync to DB
+    const syncResult = await syncDebts(clinicaDebts, minDebt);
+
+    // Steps 4-5: Escalation
+    const escalationResult = await processEscalations(config);
+
+    // Step 6: Summary to Gil
+    await sendSummaryToGil(config, syncResult, escalationResult);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[debt-agent] Done in ${elapsed}s`);
+
+  } catch (error: any) {
+    console.error('[debt-agent] Fatal error:', error.message);
+    try {
+      await sendWhatsApp('972543123419',
+        `❌ סוכן גבייה נכשל: ${error.message}\nצריך בדיקה!`);
+    } catch {}
+    process.exit(1);
+  } finally {
+    await pool.end();
+  }
+}
+
+main();

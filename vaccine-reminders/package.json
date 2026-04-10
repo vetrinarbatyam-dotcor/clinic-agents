@@ -1,0 +1,10 @@
+{
+  "name": "vaccine-reminders",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dry-run": "bun run src/index.ts --dry-run"
+  }
+}

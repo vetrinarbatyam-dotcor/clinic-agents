@@ -1,0 +1,5 @@
+# marpet-audit — daily insurance audit at 02:00
+SHELL=/bin/bash
+PATH=/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+0 2 * * * claude-user /home/claude-user/clinic-agents/marpet-audit/run.sh

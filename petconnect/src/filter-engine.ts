@@ -1,0 +1,209 @@
+// PetConnect — Filter Engine
+// Query clients+pets from PostgreSQL with dynamic filters
+
+import pg from 'pg';
+
+export interface FilterCriteria {
+  species?: 'dog' | 'cat' | 'all';           // סוג חיה
+  minAge?: number;                             // גיל מינימלי (שנים)
+  maxAge?: number;                             // גיל מקסימלי
+  breed?: string;                              // גזע ספציפי
+  hasInsurance?: boolean;                      // יש ביטוח?
+  insuranceName?: string;                      // חברת ביטוח ספציפית
+  isNewClient?: boolean;                       // לקוח חדש (ביקור ראשון ב-30 יום אחרונים)
+  minSeniority?: number;                       // ותק מינימלי (חודשים)
+  maxSeniority?: number;                       // ותק מקסימלי
+  lastVisitBefore?: string;                    // ביקור אחרון לפני תאריך (YYYY-MM-DD)
+  lastVisitAfter?: string;                     // ביקור אחרון אחרי תאריך
+  daysSinceLastVisit?: number;                 // ימים מאז ביקור אחרון
+  hasDebt?: boolean;                           // יש חוב?
+  isActive?: boolean;                          // לקוח פעיל?
+}
+
+export interface FilteredClient {
+  user_id: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  cell_phone: string;
+  email: string;
+  last_visit: string | null;
+  client_debt: number;
+  pet_id: number;
+  pet_name: string;
+  species: string;
+  breed: string;
+  age_years: number | null;
+  insurance_name: string;
+  weight: number;
+}
+
+export async function filterClients(
+  pool: pg.Pool,
+  filters: FilterCriteria
+): Promise<FilteredClient[]> {
+  const conditions: string[] = [];
+  const params: any[] = [];
+  let paramIdx = 1;
+
+  // Base: only active clients with phone numbers
+  conditions.push('(c.not_active = 0 OR c.not_active IS NULL)');
+  conditions.push('(p.not_active = 0 OR p.not_active IS NULL)');
+  conditions.push("c.cell_phone IS NOT NULL AND c.cell_phone != ''");
+
+  // Species filter
+  if (filters.species && filters.species !== 'all') {
+    const speciesMap: Record<string, string[]> = {
+      dog: ['dog', 'כלב', 'Dog', 'כלבה'],
+      cat: ['cat', 'חתול', 'Cat', 'חתולה'],
+    };
+    const values = speciesMap[filters.species] || [filters.species];
+    conditions.push(`p.species = ANY($${paramIdx}::text[])`);
+    params.push(values);
+    paramIdx++;
+  }
+
+  // Age filter (from date_birth)
+  if (filters.minAge !== undefined) {
+    conditions.push(`
+      p.date_birth IS NOT NULL AND p.date_birth != '' AND p.date_birth != '1/1/1970'
+      AND SPLIT_PART(p.date_birth, ' ', 1) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$'
+      AND AGE(NOW(), TO_DATE(SPLIT_PART(p.date_birth, ' ', 1), 'MM/DD/YYYY')) >= INTERVAL '${filters.minAge} years'
+    `);
+  }
+  if (filters.maxAge !== undefined) {
+    conditions.push(`
+      p.date_birth IS NOT NULL AND p.date_birth != '' AND p.date_birth != '1/1/1970'
+      AND SPLIT_PART(p.date_birth, ' ', 1) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$'
+      AND AGE(NOW(), TO_DATE(SPLIT_PART(p.date_birth, ' ', 1), 'MM/DD/YYYY')) <= INTERVAL '${filters.maxAge} years'
+    `);
+  }
+
+  // Breed filter
+  if (filters.breed) {
+    conditions.push(`p.breed ILIKE $${paramIdx}`);
+    params.push(`%${filters.breed}%`);
+    paramIdx++;
+  }
+
+  // Insurance filters
+  if (filters.hasInsurance === true) {
+    conditions.push("p.insurance_name IS NOT NULL AND p.insurance_name != ''");
+  } else if (filters.hasInsurance === false) {
+    conditions.push("(p.insurance_name IS NULL OR p.insurance_name = '')");
+  }
+
+  if (filters.insuranceName) {
+    conditions.push(`p.insurance_name ILIKE $${paramIdx}`);
+    params.push(`%${filters.insuranceName}%`);
+    paramIdx++;
+  }
+
+  // New client (last_visit within 30 days and no earlier visits)
+  if (filters.isNewClient) {
+    conditions.push("c.last_visit IS NOT NULL AND c.last_visit >= CURRENT_DATE - INTERVAL '30 days'");
+  }
+
+  // Seniority (months since first visit — approximated by last_visit distance)
+  // Note: for accurate seniority we would need first_visit date, using last_visit as proxy
+
+  // Last visit date filters
+  if (filters.lastVisitBefore) {
+    conditions.push(`c.last_visit < $${paramIdx}::date`);
+    params.push(filters.lastVisitBefore);
+    paramIdx++;
+  }
+
+  if (filters.lastVisitAfter) {
+    conditions.push(`c.last_visit > $${paramIdx}::date`);
+    params.push(filters.lastVisitAfter);
+    paramIdx++;
+  }
+
+  if (filters.daysSinceLastVisit) {
+    conditions.push(`c.last_visit <= CURRENT_DATE - INTERVAL '${filters.daysSinceLastVisit} days'`);
+    conditions.push('c.last_visit IS NOT NULL');
+  }
+
+  // Debt filter
+  if (filters.hasDebt === true) {
+    conditions.push('c.client_debt > 0');
+  } else if (filters.hasDebt === false) {
+    conditions.push('(c.client_debt = 0 OR c.client_debt IS NULL)');
+  }
+
+  const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+  const query = `
+    SELECT
+      c.user_id,
+      c.first_name,
+      c.last_name,
+      TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) as full_name,
+      c.cell_phone,
+      c.email,
+      c.last_visit::text,
+      COALESCE(c.client_debt, 0) as client_debt,
+      p.pet_id,
+      p.name as pet_name,
+      COALESCE(p.species, '') as species,
+      COALESCE(p.breed, '') as breed,
+      CASE
+        WHEN p.date_birth IS NOT NULL AND p.date_birth != '' AND p.date_birth != '1/1/1970'
+             AND SPLIT_PART(p.date_birth, ' ', 1) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$'
+        THEN EXTRACT(YEAR FROM AGE(NOW(), TO_DATE(SPLIT_PART(p.date_birth, ' ', 1), 'MM/DD/YYYY')))::int
+        ELSE NULL
+      END as age_years,
+      COALESCE(p.insurance_name, '') as insurance_name,
+      COALESCE(p.weight, 0) as weight
+    FROM clients c
+    JOIN pets p ON p.user_id = c.user_id
+    ${whereClause}
+    ORDER BY c.last_name, c.first_name, p.name
+  `;
+
+  const { rows } = await pool.query(query, params);
+  return rows;
+}
+
+// Deduplicate: one message per client (pick first pet if multiple match)
+export function deduplicateByClient(clients: FilteredClient[]): FilteredClient[] {
+  const seen = new Map<string, FilteredClient>();
+
+  for (const client of clients) {
+    const key = `${client.first_name}_${client.last_name}_${client.pet_name}`.toLowerCase();
+    if (!seen.has(key)) {
+      seen.set(key, client);
+    }
+  }
+
+  return Array.from(seen.values());
+}
+
+// Get summary stats for a filter result
+export function getFilterSummary(clients: FilteredClient[]): {
+  totalClients: number;
+  uniquePhones: number;
+  dogs: number;
+  cats: number;
+  other: number;
+  withInsurance: number;
+  avgAge: number | null;
+} {
+  const phones = new Set(clients.map(c => c.cell_phone));
+  const dogs = clients.filter(c => ['dog', 'כלב', 'Dog', 'כלבה'].includes(c.species)).length;
+  const cats = clients.filter(c => ['cat', 'חתול', 'Cat', 'חתולה'].includes(c.species)).length;
+  const withInsurance = clients.filter(c => c.insurance_name).length;
+  const ages = clients.map(c => c.age_years).filter((a): a is number => a !== null);
+  const avgAge = ages.length > 0 ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length * 10) / 10 : null;
+
+  return {
+    totalClients: clients.length,
+    uniquePhones: phones.size,
+    dogs,
+    cats,
+    other: clients.length - dogs - cats,
+    withInsurance,
+    avgAge,
+  };
+}
