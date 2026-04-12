@@ -270,7 +270,7 @@ function interpretDates(rawResponse: string, isCat: boolean): VaccineStatus[] {
   return vaccines;
 }
 
-export async function fetchEligibilityForOwner(ownerTz: string): Promise<MarpetOwnerResult> {
+export async function fetchEligibilityForOwner(ownerTz: string, retryCount = 0): Promise<MarpetOwnerResult> {
   if (!isLoggedIn) {
     await loginMarpet();
   }
@@ -300,10 +300,14 @@ export async function fetchEligibilityForOwner(ownerTz: string): Promise<MarpetO
   const resultHtml = await searchRes.text();
 
   if (resultHtml.includes('Login-Veterinarians')) {
-    console.log('[marpet] Session expired, re-logging in...');
+    if (retryCount >= 2) {
+      console.error('[marpet] Login retry exhausted for owner', ownerTz);
+      return { ownerTz, pets: [], fetchedAt: new Date().toISOString(), error: 'login retry exhausted' };
+    }
+    console.log('[marpet] Session expired, re-logging in... (attempt ' + (retryCount + 1) + ' of 2)');
     isLoggedIn = false;
     await loginMarpet();
-    return fetchEligibilityForOwner(ownerTz);
+    return fetchEligibilityForOwner(ownerTz, retryCount + 1);
   }
 
   // Not found in Marpet portal

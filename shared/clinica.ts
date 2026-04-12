@@ -113,7 +113,7 @@ export async function callAsmx(method: string, params: Record<string, any> = {})
       }
       const raw = await res.json();
       let d = raw.d ?? raw;
-      if (typeof d === 'string') { try { d = JSON.parse(d); } catch {} }
+      if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { console.error('[clinica] JSON parse failed:', e instanceof Error ? e.message : e); } }
       return d;
     } catch (e: any) {
       if (attempt === 0) { sessionTime = 0; continue; }
@@ -256,7 +256,7 @@ export async function getClientRegistrationDate(userId: string): Promise<string>
     if (Array.isArray(results) && results.length > 0) {
       return results[0].DateOfRegistration || '';
     }
-  } catch {}
+  } catch (e) { console.error("[clinica] getClientRegistrationDate failed:", e instanceof Error ? e.message : e); }
   return '';
 }
 

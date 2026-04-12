@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 
 const API = `http://${window.location.hostname}:3003`;
@@ -41,9 +42,9 @@ export default function Warehouse() {
 
   async function loadAll() {
     const [s, c, h] = await Promise.all([
-      fetch(`${API}/api/stats`).then(r => r.json()),
-      fetch(`${API}/api/config`).then(r => r.json()),
-      fetch(`${API}/api/health`).then(r => r.json()),
+      apiFetch(`${API}/api/stats`).then(r => r.json()),
+      apiFetch(`${API}/api/config`).then(r => r.json()),
+      apiFetch(`${API}/api/health`).then(r => r.json()),
     ]);
     setStats(s); setConfig(c); setHealth(h);
   }
@@ -57,7 +58,7 @@ export default function Warehouse() {
   async function runLayer(layer: string) {
     if (layer === 'initial' && !confirm('סנכרון ראשוני יקח 5-6 שעות. להריץ עכשיו?')) return;
     setRunning(layer);
-    await fetch(`${API}/api/run`, {
+    await apiFetch(`${API}/api/run`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ layer }),
     });
@@ -65,7 +66,7 @@ export default function Warehouse() {
   }
 
   async function updateConfig(key: string, value: any) {
-    await fetch(`${API}/api/config`, {
+    await apiFetch(`${API}/api/config`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key, value }),
     });

@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 import AgentStackPanel from '../components/AgentStackPanel';
 import { Link } from 'react-router-dom';
@@ -53,8 +54,8 @@ export default function VaccineReminders() {
     setLoading(true);
     try {
       const [statsRes, remindersRes] = await Promise.all([
-        fetch(`${API_BASE}/api/stats`),
-        fetch(`${API_BASE}/api/reminders?limit=500`),
+        apiFetch(`${API_BASE}/api/stats`),
+        apiFetch(`${API_BASE}/api/reminders?limit=500`),
       ]);
       if (statsRes.ok) setStats(await statsRes.json());
       if (remindersRes.ok) setReminders(await remindersRes.json());
@@ -65,17 +66,17 @@ export default function VaccineReminders() {
   }
 
   async function approveReminder(id: string) {
-    await fetch(`${API_BASE}/api/reminders/${id}/approve`, { method: 'PUT' });
+    await apiFetch(`${API_BASE}/api/reminders/${id}/approve`, { method: 'PUT' });
     loadData();
   }
 
   async function rejectReminder(id: string) {
-    await fetch(`${API_BASE}/api/reminders/${id}/reject`, { method: 'PUT' });
+    await apiFetch(`${API_BASE}/api/reminders/${id}/reject`, { method: 'PUT' });
     loadData();
   }
 
   async function approveAll() {
-    await fetch(`${API_BASE}/api/reminders/approve-all`, { method: 'PUT' });
+    await apiFetch(`${API_BASE}/api/reminders/approve-all`, { method: 'PUT' });
     loadData();
   }
 

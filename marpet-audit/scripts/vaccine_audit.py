@@ -233,7 +233,8 @@ def run_matching(clinic, insurer):
 
     unmatched = clinic[~clinic['matched']][['client','animal','date','vaccine_norm','vaccine']].copy()
     unmatched.columns = ['שם לקוח','שם חיה','תאריך','חיסון (מנורמל)','חיסון (מקורי)']
-    unmatched['תאריך'] = unmatched['תאריך'].dt.strftime('%d/%m/%Y')
+    if not unmatched.empty and pd.api.types.is_datetime64_any_dtype(unmatched['תאריך']):
+        unmatched['תאריך'] = unmatched['תאריך'].dt.strftime('%d/%m/%Y')
     unmatched['הערה'] = 'לא נמצא בביטוח'
 
     return unmatched, pd.DataFrame(table2), pd.DataFrame(table3), pd.DataFrame(table4), clinic

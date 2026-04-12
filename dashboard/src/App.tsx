@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Outlet, Link } from 'react-router-dom';
 
-const DASHBOARD_EMAIL = 'vetcenter85@gmail.com';
-const DASHBOARD_PIN = 'bond007';
+const DASHBOARD_EMAIL = import.meta.env.VITE_DASHBOARD_EMAIL || '';
+const DASHBOARD_PIN = import.meta.env.VITE_DASHBOARD_PIN || '';
 
 export default function App() {
   const [authed, setAuthed] = useState(false);

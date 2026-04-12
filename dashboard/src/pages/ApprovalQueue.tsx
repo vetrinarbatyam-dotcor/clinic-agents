@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { supabase } from '../supabase';
@@ -60,7 +61,7 @@ export default function ApprovalQueue() {
 
     // Call WhatsApp send via the server (for now just mark as sent)
     try {
-      const res = await fetch('/api/send', {
+      const res = await apiFetch('/api/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messageId: msg.id, phone: msg.client_phone, text: msg.message_text }),

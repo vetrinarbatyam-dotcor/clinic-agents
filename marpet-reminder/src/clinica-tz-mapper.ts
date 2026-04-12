@@ -200,7 +200,7 @@ async function resolveTz(clientId: string, patientId: string): Promise<TzMapping
       const tz = extractTzFromText(res.rows[0].id_number);
       if (tz) return { clientId, ownerTz: tz, foundVia: 'clinica_id_field', lastVerified: now };
     }
-  } catch (_) {}
+  } catch (e) { console.error("[tz-mapper] DB id_number lookup failed:", e instanceof Error ? e.message : e); }
 
   // Tier 1: SearchByNameClinic — IDNumber field + Notes
   let clientPhone = '';
@@ -224,7 +224,7 @@ async function resolveTz(clientId: string, patientId: string): Promise<TzMapping
       const tzFromNotes = extractTzFromText(notes);
       if (tzFromNotes) return { clientId, ownerTz: tzFromNotes, foundVia: 'client_notes', lastVerified: now };
     }
-  } catch (_) {}
+  } catch (e) { console.error("[tz-mapper] SearchByNameClinic failed:", e instanceof Error ? e.message : e); }
 
   // Tier 2: ClinicaOnline Marpet claims (GetInsuredReportForExcel)
   // Field is "IdNumber" (camelCase) in InsuredVisit response
@@ -234,7 +234,7 @@ async function resolveTz(clientId: string, patientId: string): Promise<TzMapping
       if (tzFromClaims) {
         return { clientId, ownerTz: tzFromClaims, foundVia: 'clinica_claims', lastVerified: now };
       }
-    } catch (_) {}
+    } catch (e) { console.error("[tz-mapper] getTzFromClaims failed:", e instanceof Error ? e.message : e); }
   }
 
   // Tier 3: Pet notes (Sagir, JumpNote, Panel fields)
@@ -246,7 +246,7 @@ async function resolveTz(clientId: string, patientId: string): Promise<TzMapping
       const tz = extractTzFromText(petText);
       if (tz) return { clientId, ownerTz: tz, foundVia: 'pet_notes', lastVerified: now };
     }
-  } catch (_) {}
+  } catch (e) { console.error("[tz-mapper] pet notes TZ lookup failed:", e instanceof Error ? e.message : e); }
 
   return null;
 }
@@ -314,7 +314,7 @@ export async function discoverTzForDogOwners(limit = 50): Promise<DogOwnerResult
           found_via: mapping.foundVia,
           last_verified: new Date().toISOString(),
         }, { onConflict: 'client_id' });
-      } catch (_) {}
+      } catch (e) { console.error("[tz-mapper] supabase upsert failed:", e instanceof Error ? e.message : e); }
     }
 
     results.push(base);

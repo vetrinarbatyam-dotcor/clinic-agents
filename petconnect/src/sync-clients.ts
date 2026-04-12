@@ -11,7 +11,7 @@ const pool = new pg.Pool({
   port: parseInt(process.env.DB_PORT || '5432'),
   database: process.env.DB_NAME || 'clinicpal',
   user: process.env.DB_USER || 'clinicpal_user',
-  password: process.env.DB_PASSWORD || 'clinicpal2306',
+  password: process.env.DB_PASSWORD || (() => { throw new Error('DB_PASSWORD env var is required') })(),
 });
 
 // ============ Upsert client with full details ============

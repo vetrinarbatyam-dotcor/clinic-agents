@@ -72,7 +72,7 @@ export async function scanAndProcess(opts: { dryRun?: boolean } = {}) {
 סיבה: אין מספר טלפון במערכת
 Event: ${ev.EventID}`;
       if (cfg.mode === 'live') {
-        try { await sendWhatsApp(cfg.team_alert_phone, alertMsg); } catch {}
+        try { await sendWhatsApp(cfg.team_alert_phone, alertMsg); } catch (e) { console.error("[scanner] team alert WhatsApp failed:", e instanceof Error ? e.message : e); }
       } else {
         console.log('[no-phone alert]', alertMsg);
       }
@@ -98,11 +98,29 @@ Event: ${ev.EventID}`;
       treatment_name: ev.TreatmentName || '',
     });
 
+    let sendStatus: 'sent' | 'failed' | 'shadow' = 'shadow';
+
     if (opts.dryRun || cfg.mode === 'shadow') {
       console.log(`\n--- [SHADOW] event ${ev.EventID} → ${phone} (${treatmentType})`);
       console.log(msg);
     } else if (cfg.mode === 'live') {
-      // TODO: green API send
+      try {
+        const result = await sendWhatsApp(phone, msg, {
+          category: 'reminder',
+          customer: ev.PatientID,
+          agent: 'appointment-reminder',
+        });
+        if (result.sent) {
+          sendStatus = 'sent';
+          console.log(`[LIVE] sent event ${ev.EventID} -> ${phone} (id: ${result.id}, from: ${result.from})`);
+        } else {
+          sendStatus = 'failed';
+          console.log(`[LIVE] failed event ${ev.EventID} -> ${phone}: ${result.error || result.reason || 'unknown'}`);
+        }
+      } catch (err: any) {
+        sendStatus = 'failed';
+        console.error(`[LIVE] exception event ${ev.EventID} -> ${phone}:`, err.message);
+      }
     }
 
     await pool.query(`
@@ -112,9 +130,9 @@ Event: ${ev.EventID}`;
       VALUES ($1,$2,$3,$4,$5,$6,$7,'24h',$8,$9)
       ON CONFLICT (event_id, reminder_type) DO NOTHING
     `, [ev.EventID, phone, ev.PatientID, petName, ev.UserID || calId,
-        treatmentType, begin.toISOString(), cfg.mode === 'live' ? 'sent' : 'shadow', msg]);
+        treatmentType, begin.toISOString(), sendStatus, msg]);
 
-    await logRun('reminder_queued', phone, { event_id: ev.EventID, type: treatmentType, mode: cfg.mode });
+    await logRun('reminder_queued', phone, { event_id: ev.EventID, type: treatmentType, mode: cfg.mode, status: sendStatus });
     queued++;
   }
 

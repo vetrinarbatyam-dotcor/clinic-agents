@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../supabase';
@@ -104,7 +105,7 @@ export default function Home() {
       for (const agent of data) {
         if (agent.name === 'appointment-reminder') {
           try {
-            const res = await fetch(`http://${window.location.hostname}:3457/stats`);
+            const res = await apiFetch(`http://${window.location.hostname}:3457/stats`);
             if (res.ok) {
               const j = await res.json();
               setStats(prev => ({ ...prev, [agent.id]: {
@@ -122,7 +123,7 @@ export default function Home() {
         }
         if (agent.name === 'whatsapp_db') {
           try {
-            const res = await fetch(`http://${window.location.hostname}:8000/api/agents/whatsapp_db/stats`);
+            const res = await apiFetch(`http://${window.location.hostname}:8000/api/agents/whatsapp_db/stats`);
             if (res.ok) {
               const s = await res.json();
               setStats(prev => ({ ...prev, [agent.id]: {
@@ -137,7 +138,7 @@ export default function Home() {
         if (agent.name === 'vaccine-reminders') {
           try {
             const API_BASE = `http://${window.location.hostname}:3001`;
-            const res = await fetch(`${API_BASE}/api/stats`);
+            const res = await apiFetch(`${API_BASE}/api/stats`);
             if (res.ok) {
               const s = await res.json();
               setStats(prev => ({
@@ -182,6 +183,12 @@ export default function Home() {
     if (agent.name === 'appointment-booker') return '/appointment-booker';
     if (agent.name === 'appointment-reminder') return '/appointment-reminder';
     return `/queue/${agent.id}`;
+  }
+
+  function getSettingsLink(agent: Agent): string {
+    // Agents with their own integrated config page (no separate /agent/:id needed)
+    if (agent.name === 'appointment-booker') return '/appointment-booker';
+    return `/agent/${agent.id}`;
   }
 
   function getMainLabel(agent: Agent, pendingCount: number): string {
@@ -247,7 +254,7 @@ export default function Home() {
             {getMainLabel(agent, s.pending)}
           </Link>
           {!isVaccine && (
-            <Link to={`/agent/${agent.id}`} className="px-3 py-2 border rounded-lg text-sm hover:bg-gray-50">
+            <Link to={getSettingsLink(agent)} className="px-3 py-2 border rounded-lg text-sm hover:bg-gray-50">
               הגדרות
             </Link>
           )}
@@ -332,7 +339,7 @@ export default function Home() {
             {getMainLabel(agent, s.pending)}
           </Link>
           {!isVaccine && (
-            <Link to={`/agent/${agent.id}`} className="px-2.5 py-1.5 border rounded-lg text-xs hover:bg-gray-50 whitespace-nowrap">
+            <Link to={getSettingsLink(agent)} className="px-2.5 py-1.5 border rounded-lg text-xs hover:bg-gray-50 whitespace-nowrap">
               הגדרות
             </Link>
           )}

@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 
 const API = `http://${window.location.hostname}/api/agents/appointment_reminder`;
@@ -59,10 +60,10 @@ export default function AppointmentReminder() {
   async function refresh() {
     try {
       const [s, c, r, ru] = await Promise.all([
-        fetch(`${API}/status`).then((x) => x.json()),
-        fetch(`${API}/config`).then((x) => x.json()),
-        fetch(`${API}/reminders?limit=30`).then((x) => x.json()),
-        fetch(`${API}/runs?limit=30`).then((x) => x.json()),
+        apiFetch(`${API}/status`).then((x) => x.json()),
+        apiFetch(`${API}/config`).then((x) => x.json()),
+        apiFetch(`${API}/reminders?limit=30`).then((x) => x.json()),
+        apiFetch(`${API}/runs?limit=30`).then((x) => x.json()),
       ]);
       setStatus(s);
       setConfig(c);
@@ -84,7 +85,7 @@ export default function AppointmentReminder() {
     setBusy(true);
     setMsg('');
     try {
-      await fetch(`${API}/config`, {
+      await apiFetch(`${API}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config: updated, updated_by: 'dashboard' }),
@@ -101,7 +102,7 @@ export default function AppointmentReminder() {
 
   async function toggleEnabled() {
     if (!status) return;
-    await fetch(`${API}/toggle`, {
+    await apiFetch(`${API}/toggle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: !status.enabled }),
@@ -129,7 +130,7 @@ export default function AppointmentReminder() {
     setBusy(true);
     setMsg('⏳ מריץ סריקה...');
     try {
-      const r = await fetch(`${API}/run_now`, { method: 'POST' }).then((x) => x.json());
+      const r = await apiFetch(`${API}/run_now`, { method: 'POST' }).then((x) => x.json());
       setMsg(r.ok ? `✅ הסריקה הסתיימה` : `❌ ${r.error || r.stderr}`);
       await refresh();
     } finally {
@@ -142,7 +143,7 @@ export default function AppointmentReminder() {
     setBusy(true);
     setMsg('⏳ שולח את כל ההודעות לטלפון הבקרה...');
     try {
-      const r = await fetch(`${API}/test_send_all`, { method: 'POST' }).then((x) => x.json());
+      const r = await apiFetch(`${API}/test_send_all`, { method: 'POST' }).then((x) => x.json());
       setMsg(r.ok ? `✅ נשלח לטלפון בקרה. בדוק וואטסאפ` : `❌ ${r.error || r.stderr}`);
       await refresh();
     } finally {

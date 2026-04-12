@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useState, useEffect } from 'react';
 import AgentStackPanel from '../components/AgentStackPanel';
 
@@ -90,7 +91,7 @@ export default function PetConnect() {
   const [breedOptions, setBreedOptions] = useState<string[]>([]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/breeds`).then(r => r.json()).then(setBreedOptions).catch(() => {});
+    apiFetch(`${API_BASE}/api/breeds`).then(r => r.json()).then(setBreedOptions).catch(() => {});
   }, []);
 
   function buildFilters() {
@@ -112,7 +113,7 @@ export default function PetConnect() {
     setLoading(true);
     setSendResult(null);
     try {
-      const res = await fetch(`${API_BASE}/api/filter`, {
+      const res = await apiFetch(`${API_BASE}/api/filter`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filters: buildFilters() }),
@@ -133,7 +134,7 @@ export default function PetConnect() {
     }
     setSending(true);
     try {
-      const res = await fetch(`${API_BASE}/api/send`, {
+      const res = await apiFetch(`${API_BASE}/api/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

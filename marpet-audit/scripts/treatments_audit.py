@@ -626,7 +626,8 @@ def run_audit(clinic, insurer):
     lost = clinic[~clinic['matched']].copy()
     table1 = lost[['client','animal','date','treatment','price','norm']].copy()
     table1.columns = ['שם לקוח','שם חיה','תאריך','טיפול במרפאה','מחיר','טיפול מנורמל']
-    table1['תאריך'] = table1['תאריך'].dt.strftime('%d/%m/%Y')
+    if not table1.empty and pd.api.types.is_datetime64_any_dtype(table1['תאריך']):
+        table1['תאריך'] = table1['תאריך'].dt.strftime('%d/%m/%Y')
     table1['סטטוס'] = 'לא נמצא בביטוח'
 
     # Table 3: Delta

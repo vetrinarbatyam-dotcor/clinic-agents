@@ -6,17 +6,30 @@ const pool = new pg.Pool({
   port: parseInt(process.env.DB_PORT || "5432"),
   database: process.env.DB_NAME || "clinicpal",
   user: process.env.DB_USER || "clinicpal_user",
-  password: process.env.DB_PASSWORD || "clinicpal2306",
+  password: process.env.DB_PASSWORD || (() => { throw new Error("DB_PASSWORD env var is required") })(),
 });
 
 const PORT = parseInt(process.env.VACCINE_API_PORT || "3001");
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": "http://167.86.69.208:3000",
   "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Content-Type": "application/json",
 };
+
+
+const API_KEY = process.env.API_KEY || '';
+
+function checkAuth(req: Request): Response | null {
+  const url = new URL(req.url);
+  if (url.pathname === '/health' || url.pathname === '/healthz') return null;
+  const auth = req.headers.get('authorization');
+  if (!API_KEY || auth !== `Bearer ${API_KEY}`) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  return null;
+}
 
 Bun.serve({
   port: PORT,
@@ -28,6 +41,10 @@ Bun.serve({
     if (req.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders });
     }
+
+    // Auth check
+    const authErr = checkAuth(req);
+    if (authErr) return authErr;
 
     try {
       // GET /api/reminders — list reminders with optional filters

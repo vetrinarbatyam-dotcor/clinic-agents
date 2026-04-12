@@ -102,6 +102,6 @@ export async function hasVisitedSinceDueDate(petId: number, dueDate: Date): Prom
         if (session.Finds || session.Notes) return true;
       }
     }
-  } catch {}
+  } catch (e) { console.error("[vaccine-fetcher] hasVisitedSinceDueDate check failed:", e instanceof Error ? e.message : e); }
   return false;
 }

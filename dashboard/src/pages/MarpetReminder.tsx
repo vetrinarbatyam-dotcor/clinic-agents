@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
@@ -87,7 +88,7 @@ export default function MarpetReminder() {
     setRunLog(dryRun ? 'מריץ dry run...' : 'מריץ סוכן...');
     try {
       const API_BASE = `http://${window.location.hostname}:3002`;
-      const res = await fetch(`${API_BASE}/api/run`, {
+      const res = await apiFetch(`${API_BASE}/api/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent: 'marpet-reminder', dryRun }),

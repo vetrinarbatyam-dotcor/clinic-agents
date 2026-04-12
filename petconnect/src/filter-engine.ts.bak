@@ -68,19 +68,15 @@ export async function filterClients(
     conditions.push(`
       p.date_birth IS NOT NULL AND p.date_birth != '' AND p.date_birth != '1/1/1970'
       AND SPLIT_PART(p.date_birth, ' ', 1) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$'
-      AND AGE(NOW(), TO_DATE(SPLIT_PART(p.date_birth, ' ', 1), 'MM/DD/YYYY')) >= make_interval(years => $${paramIdx})
+      AND AGE(NOW(), TO_DATE(SPLIT_PART(p.date_birth, ' ', 1), 'MM/DD/YYYY')) >= INTERVAL '${filters.minAge} years'
     `);
-    params.push(filters.minAge);
-    paramIdx++;
   }
   if (filters.maxAge !== undefined) {
     conditions.push(`
       p.date_birth IS NOT NULL AND p.date_birth != '' AND p.date_birth != '1/1/1970'
       AND SPLIT_PART(p.date_birth, ' ', 1) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$'
-      AND AGE(NOW(), TO_DATE(SPLIT_PART(p.date_birth, ' ', 1), 'MM/DD/YYYY')) <= make_interval(years => $${paramIdx})
+      AND AGE(NOW(), TO_DATE(SPLIT_PART(p.date_birth, ' ', 1), 'MM/DD/YYYY')) <= INTERVAL '${filters.maxAge} years'
     `);
-    params.push(filters.maxAge);
-    paramIdx++;
   }
 
   // Breed filter
@@ -125,9 +121,7 @@ export async function filterClients(
   }
 
   if (filters.daysSinceLastVisit) {
-    conditions.push(`c.last_visit <= CURRENT_DATE - make_interval(days => $${paramIdx})`);
-    params.push(filters.daysSinceLastVisit);
-    paramIdx++;
+    conditions.push(`c.last_visit <= CURRENT_DATE - INTERVAL '${filters.daysSinceLastVisit} days'`);
     conditions.push('c.last_visit IS NOT NULL');
   }
 

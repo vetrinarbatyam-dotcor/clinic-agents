@@ -240,17 +240,13 @@ async function processEscalations(config: Record<string, string>): Promise<{
          messageText, result.sent ? 'sent' : 'pending', result.sent ? new Date() : null, result.id || null]
       );
 
-      // Only bump escalation if message was actually sent
-      if (result.sent) {
-        await pool.query(
-          'UPDATE debts SET escalation_level = $1, updated_at = NOW() WHERE user_id = $2',
-          [decision.newLevel, debt.user_id]
-        );
-        autoSent.push(decision);
-        console.log(`[debt-agent] Auto-sent level ${decision.newLevel} to ${templateVars.clientName} (${phone})`);
-      } else {
-        console.warn(`[debt-agent] WhatsApp failed for ${debt.user_id}, keeping escalation at level ${debt.escalation_level}`);
-      }
+      await pool.query(
+        'UPDATE debts SET escalation_level = $1, updated_at = NOW() WHERE user_id = $2',
+        [decision.newLevel, debt.user_id]
+      );
+
+      autoSent.push(decision);
+      console.log(`[debt-agent] Auto-sent level ${decision.newLevel} to ${templateVars.clientName} (${phone})`);
     } else {
       // Queue for Gil approval (level 3+) or dry run
       await pool.query(
@@ -384,7 +380,7 @@ async function main() {
     try {
       await sendWhatsApp('972543123419',
         `❌ סוכן גבייה נכשל: ${error.message}\nצריך בדיקה!`);
-    } catch (e) { console.error("[debt-agent] failure alert WhatsApp failed:", e instanceof Error ? e.message : e); }
+    } catch {}
     process.exit(1);
   } finally {
     await pool.end();

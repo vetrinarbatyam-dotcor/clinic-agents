@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 
 type NumberStatus = {
@@ -40,8 +41,8 @@ export default function WhatsAppHealth() {
     setLoading(true);
     try {
       const [s, l] = await Promise.all([
-        fetch('/api/whatsapp/status').then(r => r.json()),
-        fetch('/api/whatsapp/log?limit=30').then(r => r.json()),
+        apiFetch('/api/whatsapp/status').then(r => r.json()),
+        apiFetch('/api/whatsapp/log?limit=30').then(r => r.json()),
       ]);
       setStatus(s);
       setLog(l.rows || []);
@@ -57,7 +58,7 @@ export default function WhatsAppHealth() {
   }, []);
 
   const promote = async (phone: string) => {
-    await fetch(`/api/whatsapp/promote/${phone}`, { method: 'POST' });
+    await apiFetch(`/api/whatsapp/promote/${phone}`, { method: 'POST' });
     load();
   };
 

@@ -14,7 +14,7 @@ const pool = new pg.Pool({
   port: parseInt(process.env.DB_PORT || '5432'),
   database: process.env.DB_NAME || 'clinicpal',
   user: process.env.DB_USER || 'clinicpal_user',
-  password: process.env.DB_PASSWORD || 'clinicpal2306',
+  password: process.env.DB_PASSWORD || (() => { throw new Error('DB_PASSWORD env var is required') })(),
   max: 5,
 });
 
@@ -165,7 +165,7 @@ async function backfill() {
               JSON.stringify(p),
             ]);
             presCount++;
-          } catch {}
+          } catch (e) { console.error("[backfill] prescription insert failed:", e instanceof Error ? e.message : e); }
         }
       }
     }

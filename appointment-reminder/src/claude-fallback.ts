@@ -28,7 +28,7 @@ intent unknown = לא ברור — בקש בנימוס לבחור 1/2/3`;
           resolve(parsed);
           return;
         }
-      } catch {}
+      } catch (e) { console.error("[claude-fallback] JSON parse failed:", e instanceof Error ? e.message : e); }
       resolve({ intent: 'unknown', human_response: 'לא הבנתי 🤔 אפשר לבחור: 1=מאשר, 2=לדחות, 3=לבטל' });
     });
     proc.on('error', () => resolve({ intent: 'unknown', human_response: 'לא הבנתי 🤔 אפשר לבחור: 1=מאשר, 2=לדחות, 3=לבטל' }));

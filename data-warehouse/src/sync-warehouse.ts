@@ -17,7 +17,7 @@ const pool = new pg.Pool({
   port: parseInt(process.env.DB_PORT || '5432'),
   database: process.env.DB_NAME || 'clinicpal',
   user: process.env.DB_USER || 'clinicpal_user',
-  password: process.env.DB_PASSWORD || 'clinicpal2306',
+  password: process.env.DB_PASSWORD || (() => { throw new Error('DB_PASSWORD env var is required') })(),
   max: 10,
 });
 
@@ -135,8 +135,8 @@ function parseSession(s: any, petId: number) {
     petId,
     vaccineName: s.Vaccine.Name || s.Vaccine.VaccineName || '',
     vaccineId: s.Vaccine.ID || s.Vaccine.VaccineID || s.Vaccine.FieldID || null,
-    vaccineDate: parseClinicaDateIL(s.Vaccine.Date || '') || date,
-    nextDueDate: parseClinicaDateIL(s.Vaccine.NextDate || ''),
+    vaccineDate: parseClinicaDate(s.Vaccine.Date || '') || date,
+    nextDueDate: parseClinicaDate(s.Vaccine.NextDate || ''),
     batchNumber: String(s.Vaccine.BatchAmount || s.Vaccine.Batch || ''),
     manufacturer: s.Vaccine.Manufacturer || '',
     raw: s.Vaccine,
@@ -183,7 +183,7 @@ function parseSession(s: any, petId: number) {
 }
 
 
-function parseClinicaDateIL(s: string): string | null {
+function parseClinicaDate(s: string): string | null {
   if (!s) return null;
   const datePart = s.split(' ')[0];
   const m = datePart.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -193,13 +193,6 @@ function parseClinicaDateIL(s: string): string | null {
   return `${m[3]}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 }
 
-function parseClinicaDate(s: string): string | null {
-  if (!s) return null;
-  const datePart = s.split(' ')[0];
-  const m = datePart.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return null;
-  return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
-}
 
 // ============ Upsert visit and related rows ============
 async function upsertSession(parsed: ReturnType<typeof parseSession>): Promise<void> {
@@ -365,7 +358,7 @@ export async function syncAppointments(daysFrom: number, daysTo: number, layer: 
         if (result.rows[0].inserted) added++;
         else updated++;
       }
-    } catch {}
+    } catch (e) { console.error("[warehouse] appointment sync failed:", e instanceof Error ? e.message : e); }
   }
 
   await finishRun(runId, 'success', { added, updated });

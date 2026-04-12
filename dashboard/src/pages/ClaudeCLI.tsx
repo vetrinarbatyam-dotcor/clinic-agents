@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 
-const CLI_PIN = 'gulash2026';
+const CLI_PIN = import.meta.env.VITE_CLI_PIN || '';
 
 const AGENTS = [
   { name: 'clinic-agents', path: '/home/claude-user/clinic-agents', icon: '🏠', label: 'בסיס — clinic-agents' },

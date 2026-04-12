@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 
 interface AccountStatus {
@@ -29,9 +30,9 @@ export default function GreenApi() {
     setLoading(true);
     try {
       const [s, st, rc] = await Promise.all([
-        fetch('/api/integrations/green-api/status').then(r => r.json()),
-        fetch('/api/integrations/green-api/stats').then(r => r.json()),
-        fetch('/api/integrations/green-api/recent').then(r => r.json()),
+        apiFetch('/api/integrations/green-api/status').then(r => r.json()),
+        apiFetch('/api/integrations/green-api/stats').then(r => r.json()),
+        apiFetch('/api/integrations/green-api/recent').then(r => r.json()),
       ]);
       setAccounts(s.accounts || []);
       setStats(st);
@@ -44,7 +45,7 @@ export default function GreenApi() {
   const ping = async () => {
     setPinging(true);
     try {
-      await fetch('/api/integrations/green-api/ping', { method: 'POST' });
+      await apiFetch('/api/integrations/green-api/ping', { method: 'POST' });
       await load();
     } finally {
       setPinging(false);

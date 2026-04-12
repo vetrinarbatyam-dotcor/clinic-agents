@@ -98,13 +98,13 @@ async function isNewClient(visit: SessionVisit): Promise<boolean> {
       const ageMonths = (Date.now() - birthDate.getTime()) / (1000 * 60 * 60 * 24 * 30);
       if (ageMonths <= 6) return true;
     }
-  } catch {}
+  } catch (e) { console.error("[classifier] pet age check failed:", e instanceof Error ? e.message : e); }
 
   // First visit ever
   try {
     const sessions = await getPetSessions(visit.petId, 730);
     if (!sessions || sessions.length <= 1) return true;
-  } catch {}
+  } catch (e) { console.error("[classifier] pet sessions check failed:", e instanceof Error ? e.message : e); }
 
   return false;
 }

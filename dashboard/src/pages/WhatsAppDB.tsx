@@ -1,3 +1,4 @@
+import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -48,8 +49,8 @@ export default function WhatsAppDB() {
   async function loadAll() {
     try {
       const [ov, h] = await Promise.all([
-        fetch(`${API_BASE}/api/agents/whatsapp_db/overview`).then(r => r.json()),
-        fetch(`${API_BASE}/api/agents/whatsapp_db/health`).then(r => r.json()),
+        apiFetch(`${API_BASE}/api/agents/whatsapp_db/overview`).then(r => r.json()),
+        apiFetch(`${API_BASE}/api/agents/whatsapp_db/health`).then(r => r.json()),
       ]);
       setOverview(ov);
       setHealth(h);
@@ -59,7 +60,7 @@ export default function WhatsAppDB() {
   async function loadReport(p: string) {
     setLoading(true);
     try {
-      const r = await fetch(`${API_BASE}/api/agents/whatsapp_db/report/${p}`).then(r => r.json());
+      const r = await apiFetch(`${API_BASE}/api/agents/whatsapp_db/report/${p}`).then(r => r.json());
       setReport(r);
     } catch (e) { console.error(e); }
     setLoading(false);

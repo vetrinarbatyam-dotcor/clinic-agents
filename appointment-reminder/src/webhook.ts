@@ -3,16 +3,33 @@ import { pool } from './db';
 const PORT = Number(process.env.APPT_WEBHOOK_PORT || 3457);
 
 const CORS = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': 'http://167.86.69.208:3000',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
+
+
+const API_KEY = process.env.API_KEY || '';
+
+function checkAuth(req: Request): Response | null {
+  const url = new URL(req.url);
+  if (url.pathname === '/health' || url.pathname === '/healthz') return null;
+  const auth = req.headers.get('authorization');
+  if (!API_KEY || auth !== `Bearer ${API_KEY}`) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  return null;
+}
 
 Bun.serve({
   port: PORT,
   async fetch(req) {
     const url = new URL(req.url);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+
+    // Auth check
+    const authErr = checkAuth(req);
+    if (authErr) return authErr;
 
     if (url.pathname === '/stats' && req.method === 'GET') {
       try {

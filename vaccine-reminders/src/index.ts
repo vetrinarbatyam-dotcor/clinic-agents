@@ -9,13 +9,14 @@ import { buildReminderMessage } from "./message-builder";
 const DRY_RUN = process.argv.includes("--dry-run");
 const GIL_PHONE = "0543123419";
 const AGENT_NAME = "vaccine-reminders";
+const AUTO_APPROVE = process.env.VACCINE_AUTO_APPROVE !== "false";
 
 const pool = new pg.Pool({
   host: process.env.DB_HOST || "localhost",
   port: parseInt(process.env.DB_PORT || "5432"),
   database: process.env.DB_NAME || "clinicpal",
   user: process.env.DB_USER || "clinicpal_user",
-  password: process.env.DB_PASSWORD || "clinicpal2306",
+  password: process.env.DB_PASSWORD || (() => { throw new Error("DB_PASSWORD env var is required") })(),
 });
 
 async function getSentStages(petId: number, vaccineName: string): Promise<number[]> {
@@ -46,6 +47,67 @@ async function insertReminder(record: {
      record.vaccine_name, record.due_date, record.stage, record.status, record.message_text]
   );
   return rows[0]?.id || null;
+}
+
+async function isClientEngaged(phone: string, petId: number): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT status FROM appt_booker_outbound_queue
+     WHERE phone = $1 AND pet_id = $2
+       AND status IN ('replied', 'snoozed', 'needs_callback', 'booked', 'declined_final')
+     ORDER BY id DESC LIMIT 1`,
+    [phone, petId]
+  );
+  return rows.length > 0;
+}
+
+async function insertToOutboundQueue(record: {
+  phone: string;
+  patientId: string;
+  petId: number;
+  petName: string;
+  vaccineName: string;
+  dueDate: string;
+  reminderId: string;
+}): Promise<void> {
+  // Lookup the appointment_booker config to classify the vaccine
+  const cfgRow = await pool.query(
+    "SELECT config FROM agent_configs WHERE agent_name = 'appointment_booker'"
+  );
+  let category = 'unknown';
+  let categories: any = {};
+  if (cfgRow.rows.length > 0) {
+    categories = cfgRow.rows[0].config?.vaccine_categories || {};
+  }
+
+  const nameLower = (record.vaccineName || '').toLowerCase();
+  for (const [catKey, cat] of Object.entries(categories)) {
+    const keywords = (cat as any)?.keywords || [];
+    for (const kw of keywords) {
+      if (kw && nameLower.includes(kw.toLowerCase())) {
+        category = catKey;
+        break;
+      }
+    }
+    if (category !== 'unknown') break;
+  }
+
+  await pool.query(
+    `INSERT INTO appt_booker_outbound_queue
+       (agent_name, treatment_key, phone, patient_id, pet_id, pet_name,
+        item_type, due_date, sent_at, status, vaccine_name, vaccine_category, source_reminder_id)
+     VALUES ('vaccine-reminders', 'vaccine', $1, $2, $3, $4,
+             'vaccination', $5, NOW(), 'sent', $6, $7, $8)`,
+    [
+      record.phone,
+      record.patientId,
+      record.petId,
+      record.petName,
+      record.dueDate,
+      record.vaccineName,
+      category,
+      record.reminderId,
+    ]
+  );
 }
 
 async function run() {
@@ -80,6 +142,12 @@ async function run() {
     if (pending.length >= maxPerDay) {
       console.log(`[vaccine] Reached daily limit of ${maxPerDay}`);
       break;
+    }
+
+    // Skip if client is already engaged with the booker
+    if (await isClientEngaged(vaccine.OwnerPhone, vaccine.PetID)) {
+      skipped.push(`${vaccine.OwnerName} (${vaccine.PetName}) — already engaged with booker`);
+      continue;
     }
 
     processed++;
@@ -141,8 +209,9 @@ async function run() {
       continue;
     }
 
-    // Insert as pending
-    await insertReminder({
+    // Insert as sent (auto-approve) or pending
+    const initialStatus = AUTO_APPROVE ? "sent" : "pending";
+    const reminderId = await insertReminder({
       pet_id: vaccine.PetID,
       pet_name: vaccine.PetName,
       owner_name: vaccine.OwnerName,
@@ -150,9 +219,38 @@ async function run() {
       vaccine_name: vaccine.VaccineName,
       due_date: vaccine.DueDate,
       stage: stage.stage,
-      status: "pending",
+      status: initialStatus,
       message_text: message,
     });
+
+    // Auto-approve: send WhatsApp immediately and mirror to outbound queue
+    if (AUTO_APPROVE) {
+      try {
+        const waResult = await sendWhatsApp(vaccine.OwnerPhone, message);
+        if (!waResult.sent) {
+          console.error(`[vaccine] WA send failed for ${vaccine.OwnerPhone}:`, waResult.error);
+        }
+      } catch (e) {
+        console.error(`[vaccine] WA send error for ${vaccine.OwnerPhone}:`, e);
+      }
+
+      // Mirror to appointment-booker queue for fast-path follow-up
+      if (reminderId) {
+        try {
+          await insertToOutboundQueue({
+            phone: vaccine.OwnerPhone,
+            patientId: vaccine.UserID,
+            petId: vaccine.PetID,
+            petName: vaccine.PetName,
+            vaccineName: vaccine.VaccineName,
+            dueDate: vaccine.DueDate,
+            reminderId,
+          });
+        } catch (e) {
+          console.error("[vaccine] failed to insert to outbound_queue:", e);
+        }
+      }
+    }
 
     pending.push({
       name: vaccine.OwnerName,
