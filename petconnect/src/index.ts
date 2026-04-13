@@ -6,18 +6,11 @@
 //   bun run petconnect:sync:details  # Only enrich pet details
 
 import 'dotenv/config';
-import pg from 'pg';
+import { pool } from '../../shared/db';
 import { filterClients, deduplicateByClient, getFilterSummary, type FilterCriteria } from './filter-engine.ts';
 import { sendMessages, type SendConfig } from './message-sender.ts';
 import { sendWhatsApp } from '../../shared/whatsapp.ts';
 
-const pool = new pg.Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'clinicpal',
-  user: process.env.DB_USER || 'clinicpal_user',
-  password: process.env.DB_PASSWORD || (() => { throw new Error('DB_PASSWORD env var is required') })(),
-});
 
 // Built-in message templates
 const TEMPLATES: Record<string, { name: string; category: string; text: string }> = {

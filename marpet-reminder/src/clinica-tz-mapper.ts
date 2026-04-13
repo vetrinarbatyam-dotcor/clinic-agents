@@ -13,16 +13,8 @@
 
 import { callAsmx } from '../../shared/clinica';
 import { supabase } from '../../shared/supabase';
-import pg from 'pg';
-const { Pool } = pg;
+import { pool } from '../../shared/db';
 
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'clinicpal',
-  user: process.env.DB_USER || 'clinicpal_user',
-  password: process.env.DB_PASSWORD,
-});
 
 // Israeli ID: 9 digits with Luhn-like checksum
 const TZ_REGEX = /\b(\d{9})\b/g;

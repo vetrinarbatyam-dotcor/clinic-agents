@@ -177,14 +177,7 @@ export async function getVisitsForDate(dateStr: string): Promise<SessionVisit[]>
   console.log(`[clinica] Scanning all pets for sessions on ${dateStr}...`);
 
   // Get all pets + client info from local DB
-  const { default: pg } = await import('pg');
-  const pool = new pg.Pool({
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || '5432'),
-    database: process.env.DB_NAME || 'clinicpal',
-    user: process.env.DB_USER || 'clinicpal_user',
-    password: process.env.DB_PASSWORD || 'clinicpal2306',
-  });
+  const { pool } = await import('./db');
 
   const { rows: pets } = await pool.query(`
     SELECT p.pet_id, p.name as pet_name, p.user_id,
@@ -193,7 +186,6 @@ export async function getVisitsForDate(dateStr: string): Promise<SessionVisit[]>
     JOIN clients c ON p.user_id = c.user_id
     WHERE (p.not_active IS NULL OR p.not_active = 0)
   `);
-  await pool.end();
 
   console.log(`[clinica] Found ${pets.length} active pets in DB`);
 

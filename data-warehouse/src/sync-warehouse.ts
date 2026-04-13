@@ -9,17 +9,9 @@
 //   bun run warehouse:therapists   # Therapists only (~10s)
 
 import 'dotenv/config';
-import pg from 'pg';
+import { pool } from '../../shared/db';
 import { callAsmx, formatDateMMDDYYYY, getIsraelDate } from '../../shared/clinica.ts';
 
-const pool = new pg.Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'clinicpal',
-  user: process.env.DB_USER || 'clinicpal_user',
-  password: process.env.DB_PASSWORD || (() => { throw new Error('DB_PASSWORD env var is required') })(),
-  max: 10,
-});
 
 // ============ Sync run tracking ============
 async function startRun(layer: string, tableName: string | null = null, triggeredBy = 'cron'): Promise<number> {

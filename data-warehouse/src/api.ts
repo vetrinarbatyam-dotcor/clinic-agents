@@ -2,16 +2,9 @@
 // Endpoints for dashboard: stats, runs history, config, run-now triggers
 
 import 'dotenv/config';
-import pg from 'pg';
+import { pool } from '../../shared/db';
 import { spawn } from 'child_process';
 
-const pool = new pg.Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'clinicpal',
-  user: process.env.DB_USER || 'clinicpal_user',
-  password: process.env.DB_PASSWORD || (() => { throw new Error('DB_PASSWORD env var is required') })(),
-});
 
 const PORT = 3003;
 const CORS = {

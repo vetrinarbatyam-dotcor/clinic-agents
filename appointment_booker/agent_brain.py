@@ -417,6 +417,12 @@ def process_message(session, text, config, outbound_info: dict) -> dict:
                 "slot_iso": slot_iso,
                 "valid_count": len(valid_isos),
             })
+            # BUG FIX: Do not send LLM reply with invalid slot to customer.
+            # Replace with safe fallback; stay in ASK so next msg re-fetches slots.
+            reply = "אנא המתן, אני בודק שוב את הזמנים הפנויים..."
+            if getattr(config, 'mode', 'live') == 'dry_run':
+                reply = '[הדמיה] ' + reply
+            new_state = "ASK"
     _append_and_save(session, ctx, history, text, reply, new_state)
 
     if action == "handoff":

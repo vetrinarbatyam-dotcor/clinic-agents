@@ -13,7 +13,7 @@
  */
 
 import 'dotenv/config';
-import pg from 'pg';
+import { pool } from '../../shared/db';
 import { callAsmx, getIsraelDate } from '../../shared/clinica';
 import { sendWhatsApp } from '../../shared/whatsapp';
 import {
@@ -40,13 +40,6 @@ function parseClinicaDate(dateStr: string): string | null {
 }
 const FORCE = process.argv.includes('--force');
 
-const pool = new pg.Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'clinicpal',
-  user: process.env.DB_USER || 'clinicpal_user',
-  password: process.env.DB_PASSWORD || (() => { throw new Error('DB_PASSWORD env var is required') })(),
-});
 
 // ============ Step 1: Fetch debts from ClinicaOnline ============
 
