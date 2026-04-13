@@ -4,7 +4,7 @@ send_audit_report.py -- Send audit Excel report via Gmail SMTP.
 Usage:
     python send_audit_report.py <excel_path> [--date DD/MM/YYYY] [--summary "text"]
 
-Reads config from C:/Users/user/marpat/config.json
+Reads config from MARPAT_CONFIG env var or /home/claude-user/marpat/config.json
 """
 
 import sys
@@ -20,7 +20,7 @@ from datetime import datetime
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-CONFIG_FILE = "C:/Users/user/marpat/config.json"
+CONFIG_FILE = os.environ.get("MARPAT_CONFIG", "/home/claude-user/marpat/config.json")
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 

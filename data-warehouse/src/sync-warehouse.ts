@@ -242,6 +242,7 @@ async function upsertSession(parsed: ReturnType<typeof parseSession>): Promise<v
     await pool.query(`
       INSERT INTO prescriptions (session_id, pet_id, drug_name, dose, frequency, duration, instructions, prescribed_date, raw)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (session_id, drug_name) DO NOTHING
     `, [p.sessionId, p.petId, p.drugName, p.dose, p.frequency, p.duration, p.instructions, p.prescribedDate, JSON.stringify(p.raw)]);
   }
 
@@ -250,6 +251,7 @@ async function upsertSession(parsed: ReturnType<typeof parseSession>): Promise<v
     await pool.query(`
       INSERT INTO lab_results (session_id, pet_id, test_name, result_value, unit, normal_range, is_abnormal, test_date, raw)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (session_id, test_name) DO NOTHING
     `, [l.sessionId, l.petId, l.testName, l.resultValue, l.unit, l.normalRange, l.isAbnormal, l.testDate, JSON.stringify(l.raw)]);
   }
 }

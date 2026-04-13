@@ -31,19 +31,14 @@ async function run() {
 
   // Determine which dates to check:
   // - Usually: yesterday
-  // - If today is Sunday: check Thursday + Friday (skip Shabbat)
+  // - If today is Sunday: check Friday + Saturday (some clinics have Saturday visits)
   const datesToCheck: Date[] = [];
   const yesterday = getIsraelDate(-1);
 
-  if (today.getDay() === 0) {
-    // Sunday — check Friday and Thursday (Shabbat was skipped)
-    const friday = getIsraelDate(-1); // Saturday → we skip, so check Friday
-    const thursday = getIsraelDate(-2);
-    // Actually: Sunday -1 = Saturday, -2 = Friday, -3 = Thursday
+  if (today.getDay() === 0) { // Sunday
+    // Check Friday (2 days ago) and Saturday (1 day ago)
     datesToCheck.push(getIsraelDate(-2)); // Friday
-    // If Friday visits already got follow-up, they won't be sent again (duplicate check)
-    // Also check Saturday in case there were emergency visits
-    datesToCheck.push(getIsraelDate(-1)); // Saturday (might have visits like ברדס)
+    datesToCheck.push(getIsraelDate(-1)); // Saturday
   } else {
     datesToCheck.push(yesterday);
   }

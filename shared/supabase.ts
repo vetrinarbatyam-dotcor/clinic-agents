@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import type { PendingMessage, AgentConfig } from './types';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || '';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -65,7 +65,7 @@ export async function updateMessageStatus(id: string, status: string, approvedBy
 // === Check duplicates (same client+date) ===
 
 export async function wasMessageSentToday(agentId: string, clientPhone: string): Promise<boolean> {
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
   const { data } = await supabase
     .from('pending_messages')
     .select('id')

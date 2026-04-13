@@ -10,7 +10,7 @@ import { getAgent, insertPendingMessage } from '../../shared/supabase';
 import { sendWhatsApp } from '../../shared/whatsapp';
 import { callAsmx } from '../../shared/clinica';
 import { loginMarpet, fetchEligibilityForOwner } from './marpet-scraper';
-import { closePool } from './clinica-tz-mapper';
+
 import {
   filterEligibleVaccines,
   checkCooldown,
@@ -144,7 +144,6 @@ async function run() {
 
   if (visits.length === 0) {
     console.log('[marpet] No InsuredVisit records found. Check ClinicaOnline connection.');
-    await closePool();
     return;
   }
 
@@ -292,7 +291,6 @@ async function run() {
 
   if (DRY_RUN) {
     console.log('[marpet] Dry run complete.');
-    await closePool();
     return;
   }
 
@@ -304,7 +302,6 @@ async function run() {
   }
 
   console.log('[marpet] Done!');
-  await closePool();
 }
 
 run().catch(e => {

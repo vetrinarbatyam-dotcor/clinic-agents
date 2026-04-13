@@ -172,27 +172,14 @@ export async function filterClients(
   return rows;
 }
 
-// Deduplicate: one message per client (key on user_id or cell_phone)
-// When a client has multiple pets, keep the first record but combine all pet names
+// Deduplicate: one message per client (pick first pet if multiple match)
 export function deduplicateByClient(clients: FilteredClient[]): FilteredClient[] {
   const seen = new Map<string, FilteredClient>();
-  const petNames = new Map<string, Set<string>>();
 
   for (const client of clients) {
-    const key = client.user_id || client.cell_phone;
+    const key = `${client.first_name}_${client.last_name}_${client.pet_name}`.toLowerCase();
     if (!seen.has(key)) {
-      seen.set(key, { ...client });
-      petNames.set(key, new Set([client.pet_name]));
-    } else if (client.pet_name && !petNames.get(key)!.has(client.pet_name)) {
-      petNames.get(key)!.add(client.pet_name);
-    }
-  }
-
-  // Merge pet names into each deduplicated record
-  for (const [key, client] of seen) {
-    const names = Array.from(petNames.get(key)!).filter(Boolean);
-    if (names.length > 1) {
-      client.pet_name = names.slice(0, -1).join(", ") + " ו" + names[names.length - 1];
+      seen.set(key, client);
     }
   }
 

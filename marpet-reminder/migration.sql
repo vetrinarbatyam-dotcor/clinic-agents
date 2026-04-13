@@ -75,9 +75,15 @@ ALTER TABLE marpet_owner_map ENABLE ROW LEVEL SECURITY;
 ALTER TABLE marpet_eligibility ENABLE ROW LEVEL SECURITY;
 ALTER TABLE marpet_send_log ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow all for service role" ON marpet_owner_map FOR ALL USING (true);
-CREATE POLICY "Allow all for service role" ON marpet_eligibility FOR ALL USING (true);
-CREATE POLICY "Allow all for service role" ON marpet_send_log FOR ALL USING (true);
+-- Drop old insecure policies
+DROP POLICY IF EXISTS "Allow all for service role" ON marpet_owner_map;
+DROP POLICY IF EXISTS "Allow all for service role" ON marpet_eligibility;
+DROP POLICY IF EXISTS "Allow all for service role" ON marpet_send_log;
+
+-- Create proper policies (service_role only)
+CREATE POLICY "service_role_all" ON marpet_owner_map FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_all" ON marpet_eligibility FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_all" ON marpet_send_log FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 -- 7. Update found_via CHECK constraint (run if table already exists)
 -- ALTER TABLE marpet_owner_map DROP CONSTRAINT IF EXISTS marpet_owner_map_found_via_check;

@@ -14,11 +14,21 @@ const API_KEY = process.env.API_KEY || '';
 function checkAuth(req: Request): Response | null {
   const url = new URL(req.url);
   if (url.pathname === '/health' || url.pathname === '/healthz') return null;
+  // Exempt Green API webhook callbacks (POST /) - they don't carry our API key
+  if (req.method === 'POST' && (url.pathname === '/' || url.pathname === '/webhook')) return null;
   const auth = req.headers.get('authorization');
   if (!API_KEY || auth !== `Bearer ${API_KEY}`) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
   return null;
+}
+
+
+function normalizePhone(phone: string): string {
+  let p = phone.replace(/[\s\-\(\)@.*]/g, '');
+  if (p.startsWith('+972')) p = '0' + p.slice(4);
+  else if (p.startsWith('972')) p = '0' + p.slice(3);
+  return p;
 }
 
 Bun.serve({
@@ -57,8 +67,12 @@ Bun.serve({
     try {
       const body: any = await req.json();
       // Green API webhook shape
+      // Validate Green API webhook structure
+      if (!body.typeWebhook || !body.instanceData) {
+        return Response.json({ error: 'Invalid webhook payload' }, { status: 400, headers: CORS });
+      }
       if (body.typeWebhook === 'incomingMessageReceived') {
-        const phone = (body.senderData?.sender || '').replace(/@.*/, '');
+        const phone = normalizePhone(body.senderData?.sender || '');
         const text = body.messageData?.textMessageData?.textMessage
                   || body.messageData?.extendedTextMessageData?.text
                   || '';

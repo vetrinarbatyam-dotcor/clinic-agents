@@ -276,12 +276,9 @@ async function run() {
   }
 
   // Send summary to Gil
-  const stageLabels: Record<number, string> = {
-    1: "תזכורת מקדימה (שבוע לפני)",
-    2: "תזכורת שנייה (3 ימים אחרי)",
-    3: "תזכורת שלישית (17 ימים אחרי)",
-    4: "תזכורת אחרונה (חודש אחרי)",
-  };
+  const stageLabels: Record<number, string> = Object.fromEntries(
+    REMINDER_STAGES.map(s => [s.stage, `${s.name} (${s.description})`])
+  );
 
   const lines = pending.map(
     (p, i) => `${i + 1}. ${p.name} — ${p.pet} — ${p.vaccine}\n   ${stageLabels[p.stage] || `שלב ${p.stage}`}`

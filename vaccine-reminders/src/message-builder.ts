@@ -31,10 +31,7 @@ function fillTemplate(template: string, vaccine: VaccineLater, stage: ReminderSt
 async function enrichWithAI(vaccine: VaccineLater, stage: ReminderStage, baseMessage: string): Promise<string> {
   if (!ANTHROPIC_API_KEY) return baseMessage;
 
-  const stageDesc = stage.stage === 1 ? "תזכורת מקדימה, שבוע לפני" :
-                    stage.stage === 2 ? "תזכורת ראשונה אחרי המועד, 3 ימים" :
-                    stage.stage === 3 ? "תזכורת חוזרת, שבועיים וחצי" :
-                    "תזכורת אחרונה, חודש אחרי";
+  const stageDesc = `${stage.name} — ${stage.description}`;
 
   const prompt = `אתה עוזר למרפאה וטרינרית לשפר הודעת תזכורת חיסון.
 

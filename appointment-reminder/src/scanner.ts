@@ -5,6 +5,13 @@ import { fillTemplate, formatHebrewDate, getHebrewDayName } from './templates';
 import { DEFAULT_CONFIG, VACCINE_CALENDAR, type ApptReminderConfig } from './config';
 import { sendWhatsApp } from '../../shared/whatsapp';
 
+function normalizePhone(phone: string): string {
+  let p = phone.replace(/[\s\-\(\)@.*]/g, '');
+  if (p.startsWith('+972')) p = '0' + p.slice(4);
+  else if (p.startsWith('972')) p = '0' + p.slice(3);
+  return p;
+}
+
 function parseClinicaDate(s: string): Date {
   // "4/9/2026 10:40:00 AM" — MM/D/YYYY h:mm:ss AM/PM
   const m = s.match(/(\d+)\/(\d+)\/(\d+)\s+(\d+):(\d+):(\d+)\s*(AM|PM)/i);
@@ -64,6 +71,7 @@ export async function scanAndProcess(opts: { dryRun?: boolean } = {}) {
     // Phone resolution
     let phone = ev.cellphone || ev.phone || '';
     if (!phone) phone = (await getPhoneForPatient(ev.PatientID)) || '';
+    phone = normalizePhone(phone);
     if (!phone) {
       // No phone — alert clinic instead of silently skipping
       const alertMsg = `⚠️ לא נשלחה תזכורת
