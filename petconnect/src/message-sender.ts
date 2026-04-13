@@ -1,3 +1,4 @@
+import { isRestDay } from "../../shared/holidays";
 // PetConnect — Message Sender
 // Handles sending WhatsApp messages with rate limiting, dedup, and scheduling rules
 
@@ -7,17 +8,6 @@ import { sendWhatsApp } from '../../shared/whatsapp.ts';
 import { getIsraelDate, isShabbatOrHoliday } from '../../shared/clinica.ts';
 import type { FilteredClient } from './filter-engine.ts';
 
-// Israeli holidays 2026 (add more as needed)
-const ISRAELI_HOLIDAYS_2026 = [
-  '2026-03-26', '2026-03-27', // Purim area
-  '2026-04-02', '2026-04-03', '2026-04-08', '2026-04-09', // Pesach
-  '2026-04-22', // Yom HaZikaron
-  '2026-04-23', // Yom HaAtzmaut
-  '2026-05-22', // Shavuot
-  '2026-09-12', '2026-09-13', // Rosh Hashana
-  '2026-09-21', // Yom Kippur
-  '2026-09-26', '2026-09-27', '2026-10-03', // Sukkot
-];
 
 export interface SendConfig {
   minHour: number;       // default 9
@@ -58,7 +48,6 @@ export interface SendResult {
 function isWithinSendingWindow(config: SendConfig): { ok: boolean; reason?: string } {
   const now = getIsraelDate();
   const hour = now.getHours();
-  const dateStr = now.toISOString().split('T')[0];
 
   if (hour < config.minHour || hour >= config.maxHour) {
     return { ok: false, reason: `outside_hours (${hour}:00, allowed ${config.minHour}-${config.maxHour})` };
@@ -68,7 +57,7 @@ function isWithinSendingWindow(config: SendConfig): { ok: boolean; reason?: stri
     return { ok: false, reason: 'shabbat' };
   }
 
-  if (config.noHoliday && ISRAELI_HOLIDAYS_2026.includes(dateStr)) {
+  if (config.noHoliday && isRestDay(now)) {
     return { ok: false, reason: 'holiday' };
   }
 

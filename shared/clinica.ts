@@ -1,3 +1,4 @@
+import { isRestDay } from "./holidays";
 import { load } from 'cheerio';
 
 const USERNAME = process.env.CLINICA_USERNAME || '';
@@ -138,10 +139,7 @@ export function formatDateMMDDYYYY(date: Date): string {
 }
 
 export function isShabbatOrHoliday(date: Date): boolean {
-  // Saturday = 6
-  if (date.getDay() === 6) return true;
-  // TODO: add Israeli holidays
-  return false;
+  return isRestDay(date);
 }
 
 export function getNextBusinessDay(date: Date): Date {
