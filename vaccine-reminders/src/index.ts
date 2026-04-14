@@ -2,15 +2,20 @@ import "dotenv/config";
 import { pool } from "../../shared/db";
 import { getIsraelDate, isShabbatOrHoliday } from "../../shared/clinica";
 import { sendWhatsApp } from "../../shared/whatsapp";
-import { fetchVaccineLaters, hasVisitedSinceDueDate } from "./vaccine-fetcher";
-import { determineReminderStage, REMINDER_STAGES } from "./reminder-scheduler";
+import { fetchVaccineLaters, hasVisitedSinceDueDate, hasUpcomingAppointment, consolidateVaccines } from "./vaccine-fetcher";
+import {
+  determineReminderStage,
+  getStages,
+  getToleranceDays,
+  getMaxPerDay,
+  getAutoApprove,
+  getUseAI,
+  getNotifyGil,
+} from "./reminder-scheduler";
 import { buildReminderMessage } from "./message-builder";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const GIL_PHONE = "0543123419";
-const AGENT_NAME = "vaccine-reminders";
-const AUTO_APPROVE = process.env.VACCINE_AUTO_APPROVE !== "false";
-
 
 async function getSentStages(petId: number, vaccineName: string): Promise<number[]> {
   const { rows } = await pool.query(
@@ -22,15 +27,8 @@ async function getSentStages(petId: number, vaccineName: string): Promise<number
 }
 
 async function insertReminder(record: {
-  pet_id: number;
-  pet_name: string;
-  owner_name: string;
-  owner_phone: string;
-  vaccine_name: string;
-  due_date: string;
-  stage: number;
-  status: string;
-  message_text: string;
+  pet_id: number; pet_name: string; owner_name: string; owner_phone: string;
+  vaccine_name: string; due_date: string; stage: number; status: string; message_text: string;
 }): Promise<string | null> {
   const { rows } = await pool.query(
     `INSERT INTO vaccine_reminders (pet_id, pet_name, owner_name, owner_phone, vaccine_name, due_date, stage, status, message_text)
@@ -54,34 +52,26 @@ async function isClientEngaged(phone: string, petId: number): Promise<boolean> {
 }
 
 async function insertToOutboundQueue(record: {
-  phone: string;
-  patientId: string;
-  petId: number;
-  petName: string;
-  vaccineName: string;
-  dueDate: string;
-  reminderId: string;
+  phone: string; patientId: string; petId: number; petName: string;
+  vaccineName: string; dueDate: string; reminderId: string;
 }): Promise<void> {
-  // Lookup the appointment_booker config to classify the vaccine
   const cfgRow = await pool.query(
     "SELECT config FROM agent_configs WHERE agent_name = 'appointment_booker'"
   );
   let category = 'unknown';
-  let categories: any = {};
   if (cfgRow.rows.length > 0) {
-    categories = cfgRow.rows[0].config?.vaccine_categories || {};
-  }
-
-  const nameLower = (record.vaccineName || '').toLowerCase();
-  for (const [catKey, cat] of Object.entries(categories)) {
-    const keywords = (cat as any)?.keywords || [];
-    for (const kw of keywords) {
-      if (kw && nameLower.includes(kw.toLowerCase())) {
-        category = catKey;
-        break;
+    const categories = cfgRow.rows[0].config?.vaccine_categories || {};
+    const nameLower = (record.vaccineName || '').toLowerCase();
+    for (const [catKey, cat] of Object.entries(categories)) {
+      const keywords = (cat as any)?.keywords || [];
+      for (const kw of keywords) {
+        if (kw && nameLower.includes(kw.toLowerCase())) {
+          category = catKey;
+          break;
+        }
       }
+      if (category !== 'unknown') break;
     }
-    if (category !== 'unknown') break;
   }
 
   await pool.query(
@@ -90,43 +80,38 @@ async function insertToOutboundQueue(record: {
         item_type, due_date, sent_at, status, vaccine_name, vaccine_category, source_reminder_id)
      VALUES ('vaccine-reminders', 'vaccine', $1, $2, $3, $4,
              'vaccination', $5, NOW(), 'sent', $6, $7, $8)`,
-    [
-      record.phone,
-      record.patientId,
-      record.petId,
-      record.petName,
-      record.dueDate,
-      record.vaccineName,
-      category,
-      record.reminderId,
-    ]
+    [record.phone, record.patientId, record.petId, record.petName,
+     record.dueDate, record.vaccineName, category, record.reminderId]
   );
 }
-
 async function run() {
   const today = getIsraelDate();
-  console.log(`[vaccine] Starting ${DRY_RUN ? "(DRY RUN)" : ""} — ${today.toLocaleDateString("he-IL")}`);
+  const dateStr = today.toLocaleDateString("he-IL");
+  console.log(`[vaccine] Starting ${DRY_RUN ? "(DRY RUN)" : ""} -- ${dateStr}`);
 
   if (isShabbatOrHoliday(today)) {
     console.log("[vaccine] Today is Shabbat/holiday. Skipping.");
     return;
   }
 
-  const maxPerDay = 30;
-  const toleranceDays = 2;
+  const stages = await getStages();
+  const toleranceDays = await getToleranceDays();
+  const maxPerDay = await getMaxPerDay();
+  const autoApprove = await getAutoApprove();
+  const useAI = await getUseAI();
+  const notifyGil = await getNotifyGil();
 
-  // Fetch all pets with pending/overdue vaccines
-  const vaccines = await fetchVaccineLaters();
-  console.log(`[vaccine] Processing ${vaccines.length} pending vaccines...`);
+  console.log(`[vaccine] Config: maxPerDay=${maxPerDay}, tolerance=${toleranceDays}, autoApprove=${autoApprove}, useAI=${useAI}`);
+  console.log(`[vaccine] Enabled stages: ${stages.filter(s => s.enabled).map(s => s.stage + "(" + s.triggerDaysOverdue + "d)").join(", ")}`);
+
+  // Fetch and consolidate vaccines
+  const rawVaccines = await fetchVaccineLaters();
+  const vaccines = consolidateVaccines(rawVaccines);
+  console.log(`[vaccine] After consolidation: ${vaccines.length} entries (from ${rawVaccines.length} raw)`);
 
   const pending: Array<{
-    name: string;
-    phone: string;
-    pet: string;
-    vaccine: string;
-    stage: number;
-    stageName: string;
-    message: string;
+    name: string; phone: string; pet: string; vaccine: string;
+    stage: number; stageName: string; message: string;
   }> = [];
   const skipped: string[] = [];
   let processed = 0;
@@ -137,9 +122,8 @@ async function run() {
       break;
     }
 
-    // Skip if client is already engaged with the booker
     if (await isClientEngaged(vaccine.OwnerPhone, vaccine.PetID)) {
-      skipped.push(`${vaccine.OwnerName} (${vaccine.PetName}) — already engaged with booker`);
+      skipped.push(`${vaccine.OwnerName} (${vaccine.PetName}) -- already engaged with booker`);
       continue;
     }
 
@@ -148,76 +132,70 @@ async function run() {
       console.log(`[vaccine] Processed ${processed}/${vaccines.length}...`);
     }
 
-    // Check which stages were already sent
-    const sentStages = await getSentStages(vaccine.PetID, vaccine.VaccineName);
+    const vaccineDisplay = vaccine.additionalVaccines?.length
+      ? `${vaccine.VaccineName} + ${vaccine.additionalVaccines.length} more`
+      : vaccine.VaccineName;
 
-    // Determine current reminder stage
-    const stage = determineReminderStage(vaccine, sentStages, toleranceDays);
+    const sentStages = await getSentStages(vaccine.PetID, vaccine.VaccineName);
+    const stage = determineReminderStage(vaccine, sentStages, toleranceDays, stages);
     if (!stage) {
-      skipped.push(`${vaccine.OwnerName} (${vaccine.PetName}) — no stage match (overdue: ${vaccine.DaysOverdue}d)`);
+      skipped.push(`${vaccine.OwnerName} (${vaccine.PetName}) -- no stage match (overdue: ${vaccine.DaysOverdue}d)`);
       continue;
     }
 
-    // For stages 2+ (after due date), check if pet visited the clinic
+    // For stage 2+: check if visited or has upcoming appointment
     if (stage.stage >= 2) {
       const visited = await hasVisitedSinceDueDate(vaccine.PetID, vaccine.DueDateParsed);
       if (visited) {
         await insertReminder({
-          pet_id: vaccine.PetID,
-          pet_name: vaccine.PetName,
-          owner_name: vaccine.OwnerName,
-          owner_phone: vaccine.OwnerPhone,
-          vaccine_name: vaccine.VaccineName,
-          due_date: vaccine.DueDate,
-          stage: stage.stage,
-          status: "skipped",
-          message_text: "דילוג — הלקוח כבר ביקר במרפאה",
+          pet_id: vaccine.PetID, pet_name: vaccine.PetName,
+          owner_name: vaccine.OwnerName, owner_phone: vaccine.OwnerPhone,
+          vaccine_name: vaccine.VaccineName, due_date: vaccine.DueDate,
+          stage: stage.stage, status: "skipped",
+          message_text: "skip -- client already visited",
         });
-        skipped.push(`${vaccine.OwnerName} (${vaccine.PetName}) — already visited`);
+        skipped.push(`${vaccine.OwnerName} (${vaccine.PetName}) -- already visited`);
+        continue;
+      }
+
+      const hasAppt = await hasUpcomingAppointment(vaccine.PetID, 14);
+      if (hasAppt) {
+        await insertReminder({
+          pet_id: vaccine.PetID, pet_name: vaccine.PetName,
+          owner_name: vaccine.OwnerName, owner_phone: vaccine.OwnerPhone,
+          vaccine_name: vaccine.VaccineName, due_date: vaccine.DueDate,
+          stage: stage.stage, status: "skipped",
+          message_text: "skip -- upcoming appointment exists",
+        });
+        skipped.push(`${vaccine.OwnerName} (${vaccine.PetName}) -- has upcoming appointment`);
         continue;
       }
     }
-
-    // Build the message
-    const message = await buildReminderMessage(vaccine, stage, false);
+    const message = await buildReminderMessage(vaccine, stage, useAI);
 
     if (DRY_RUN) {
-      console.log(`\n--- DRY RUN ---`);
+      console.log("\n--- DRY RUN ---");
       console.log(`Stage: ${stage.stage} (${stage.name})`);
       console.log(`To: ${vaccine.OwnerName} (${vaccine.OwnerPhone})`);
       console.log(`Pet: ${vaccine.PetName}`);
-      console.log(`Vaccine: ${vaccine.VaccineName}`);
-      console.log(`Due: ${vaccine.DueDate} (${vaccine.DaysOverdue}d overdue)`);
+      console.log(`Vaccine: ${vaccineDisplay}`);
+      console.log(`Due: ${vaccine.DueDate} (${vaccine.DaysOverdue}d ${vaccine.DaysOverdue >= 0 ? "overdue" : "until due"})`);
       console.log(`Message:\n${message}`);
-      console.log(`---------------\n`);
-      pending.push({
-        name: vaccine.OwnerName,
-        phone: vaccine.OwnerPhone,
-        pet: vaccine.PetName,
-        vaccine: vaccine.VaccineName,
-        stage: stage.stage,
-        stageName: stage.name,
-        message,
-      });
+      console.log("---------------\n");
+      pending.push({ name: vaccine.OwnerName, phone: vaccine.OwnerPhone, pet: vaccine.PetName,
+        vaccine: vaccineDisplay, stage: stage.stage, stageName: stage.name, message });
       continue;
     }
 
-    // Insert as sent (auto-approve) or pending
-    const initialStatus = AUTO_APPROVE ? "sent" : "pending";
+    const initialStatus = autoApprove ? "sent" : "pending";
     const reminderId = await insertReminder({
-      pet_id: vaccine.PetID,
-      pet_name: vaccine.PetName,
-      owner_name: vaccine.OwnerName,
-      owner_phone: vaccine.OwnerPhone,
-      vaccine_name: vaccine.VaccineName,
-      due_date: vaccine.DueDate,
-      stage: stage.stage,
-      status: initialStatus,
-      message_text: message,
+      pet_id: vaccine.PetID, pet_name: vaccine.PetName,
+      owner_name: vaccine.OwnerName, owner_phone: vaccine.OwnerPhone,
+      vaccine_name: vaccine.VaccineName, due_date: vaccine.DueDate,
+      stage: stage.stage, status: initialStatus, message_text: message,
     });
 
-    // Auto-approve: send WhatsApp immediately and mirror to outbound queue
-    if (AUTO_APPROVE) {
+    if (autoApprove) {
       try {
         const waResult = await sendWhatsApp(vaccine.OwnerPhone, message);
         if (!waResult.sent) {
@@ -227,16 +205,12 @@ async function run() {
         console.error(`[vaccine] WA send error for ${vaccine.OwnerPhone}:`, e);
       }
 
-      // Mirror to appointment-booker queue for fast-path follow-up
       if (reminderId) {
         try {
           await insertToOutboundQueue({
-            phone: vaccine.OwnerPhone,
-            patientId: vaccine.UserID,
-            petId: vaccine.PetID,
-            petName: vaccine.PetName,
-            vaccineName: vaccine.VaccineName,
-            dueDate: vaccine.DueDate,
+            phone: vaccine.OwnerPhone, patientId: vaccine.UserID,
+            petId: vaccine.PetID, petName: vaccine.PetName,
+            vaccineName: vaccine.VaccineName, dueDate: vaccine.DueDate,
             reminderId,
           });
         } catch (e) {
@@ -245,15 +219,8 @@ async function run() {
       }
     }
 
-    pending.push({
-      name: vaccine.OwnerName,
-      phone: vaccine.OwnerPhone,
-      pet: vaccine.PetName,
-      vaccine: vaccine.VaccineName,
-      stage: stage.stage,
-      stageName: stage.name,
-      message,
-    });
+    pending.push({ name: vaccine.OwnerName, phone: vaccine.OwnerPhone, pet: vaccine.PetName,
+      vaccine: vaccineDisplay, stage: stage.stage, stageName: stage.name, message });
   }
 
   if (skipped.length > 0) {
@@ -269,29 +236,32 @@ async function run() {
   }
 
   // Send summary to Gil
-  const stageLabels: Record<number, string> = Object.fromEntries(
-    REMINDER_STAGES.map(s => [s.stage, `${s.name} (${s.description})`])
-  );
+  if (notifyGil) {
+    const stageLabels: Record<number, string> = {};
+    for (const s of stages) {
+      stageLabels[s.stage] = s.name + " (" + s.description + ")";
+    }
 
-  const lines = pending.map(
-    (p, i) => `${i + 1}. ${p.name} — ${p.pet} — ${p.vaccine}\n   ${stageLabels[p.stage] || `שלב ${p.stage}`}`
-  );
+    const lines = pending.map(
+      (p, i) => (i + 1) + ". " + p.name + " -- " + p.pet + " -- " + p.vaccine + "\n   " + (stageLabels[p.stage] || "stage " + p.stage)
+    );
 
-  const summary = [
-    `💉 תזכורות חיסונים — ${today.toLocaleDateString("he-IL")}`,
-    "",
-    `⏳ ממתינות לאישור: ${pending.length}`,
-    `⏭️ דולגו: ${skipped.length}`,
-    "",
-    ...lines,
-    "",
-    `👉 לאישור: http://167.86.69.208:3000`,
-  ].join("\n");
+    const summary = [
+      "vaccine reminders -- " + dateStr,
+      "",
+      (autoApprove ? "sent auto" : "pending approval") + ": " + pending.length,
+      "skipped: " + skipped.length,
+      "",
+      ...lines,
+      "",
+      "dashboard: http://167.86.69.208:3000",
+    ].join("\n");
 
-  const result = await sendWhatsApp(GIL_PHONE, summary);
-  console.log(`[vaccine] Summary sent to Gil: ${result.sent ? "OK" : result.error}`);
+    const result = await sendWhatsApp(GIL_PHONE, summary);
+    console.log(`[vaccine] Summary sent to Gil: ${result.sent ? "OK" : result.error}`);
+  }
 
-  console.log(`[vaccine] Done — ${pending.length} reminders pending`);
+  console.log(`[vaccine] Done -- ${pending.length} reminders ${autoApprove ? "sent" : "pending"}`);
   await pool.end();
 }
 

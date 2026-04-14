@@ -1,28 +1,46 @@
+import type { VaccineLater } from "./vaccine-fetcher";
+import type { ReminderStage } from "./reminder-scheduler";
+import { formatDueDateHebrew, loadConfig } from "./reminder-scheduler";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import type { VaccineLater } from "./vaccine-fetcher";
-import type { ReminderStage } from "./reminder-scheduler";
-import { formatDueDateHebrew } from "./reminder-scheduler";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = join(__dirname, "..", "templates");
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 
-function loadTemplate(stage: ReminderStage): string {
+// Load template from DB config, fallback to .txt file
+async function loadTemplate(stage: ReminderStage): Promise<string> {
+  // Try DB first
+  const config = await loadConfig();
+  if (config?.templates?.[String(stage.stage)]) {
+    return config.templates[String(stage.stage)];
+  }
+
+  // Fallback to file
   try {
     return readFileSync(join(TEMPLATES_DIR, stage.templateFile), "utf-8");
   } catch {
-    return "שלום {ownerName}! 🐾\nתזכורת לגבי החיסון של {petName} 💉\nחיסון: {vaccineName}\nנשמח לתאם תור! ☎️";
+    return "שלום {ownerName}! 🐾\nתזכורת לגבי החיסון של {petName} 💉\nחיסון: {vaccineList}\nנשמח לתאם תור! ☎️";
   }
 }
 
 function fillTemplate(template: string, vaccine: VaccineLater, stage: ReminderStage): string {
   const dueFormatted = formatDueDateHebrew(vaccine.DueDateParsed);
+
+  // Build vaccine list: single name or bullet list for consolidated vaccines
+  const allVaccines = vaccine.additionalVaccines?.length
+    ? [vaccine.VaccineName, ...vaccine.additionalVaccines]
+    : [vaccine.VaccineName];
+  const vaccineList = allVaccines.length > 1
+    ? allVaccines.map(v => `• ${v}`).join("\n")
+    : vaccine.VaccineName;
+
   return template
     .replace(/{ownerName}/g, vaccine.OwnerName)
     .replace(/{petName}/g, vaccine.PetName)
     .replace(/{vaccineName}/g, vaccine.VaccineName)
+    .replace(/{vaccineList}/g, vaccineList)
     .replace(/{dueDate}/g, dueFormatted)
     .replace(/{stage}/g, String(stage.stage))
     .replace(/{stageName}/g, stage.name);
@@ -32,7 +50,6 @@ async function enrichWithAI(vaccine: VaccineLater, stage: ReminderStage, baseMes
   if (!ANTHROPIC_API_KEY) return baseMessage;
 
   const stageDesc = `${stage.name} — ${stage.description}`;
-
   const prompt = `אתה עוזר למרפאה וטרינרית לשפר הודעת תזכורת חיסון.
 
 סוג תזכורת: ${stageDesc}
@@ -65,7 +82,6 @@ ${baseMessage}
         messages: [{ role: "user", content: prompt }],
       }),
     });
-
     const data = await res.json();
     const improved = data.content?.[0]?.text?.trim();
     if (improved && improved.length > 20) return improved;
@@ -80,7 +96,7 @@ export async function buildReminderMessage(
   stage: ReminderStage,
   useAI: boolean = false
 ): Promise<string> {
-  const template = loadTemplate(stage);
+  const template = await loadTemplate(stage);
   const filled = fillTemplate(template, vaccine, stage);
 
   if (useAI && ANTHROPIC_API_KEY) {
