@@ -25,7 +25,12 @@ async function loadTemplate(stage: ReminderStage): Promise<string> {
   }
 }
 
-function fillTemplate(template: string, vaccine: VaccineLater, stage: ReminderStage): string {
+function fillTemplate(
+  template: string,
+  vaccine: VaccineLater,
+  stage: ReminderStage,
+  extras: { cta?: string; optOut?: string } = {},
+): string {
   const dueFormatted = formatDueDateHebrew(vaccine.DueDateParsed);
 
   // Build vaccine list: single name or bullet list for consolidated vaccines
@@ -36,14 +41,19 @@ function fillTemplate(template: string, vaccine: VaccineLater, stage: ReminderSt
     ? allVaccines.map(v => `• ${v}`).join("\n")
     : vaccine.VaccineName;
 
-  return template
+  const filled = template
     .replace(/{ownerName}/g, vaccine.OwnerName)
     .replace(/{petName}/g, vaccine.PetName)
     .replace(/{vaccineName}/g, vaccine.VaccineName)
     .replace(/{vaccineList}/g, vaccineList)
     .replace(/{dueDate}/g, dueFormatted)
     .replace(/{stage}/g, String(stage.stage))
-    .replace(/{stageName}/g, stage.name);
+    .replace(/{stageName}/g, stage.name)
+    .replace(/{cta}/g, extras.cta ?? "")
+    .replace(/{optOut}/g, extras.optOut ?? "");
+
+  // Collapse 3+ newlines (left by empty cta/optOut) into 2, trim trailing whitespace
+  return filled.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 async function enrichWithAI(vaccine: VaccineLater, stage: ReminderStage, baseMessage: string): Promise<string> {
@@ -96,8 +106,12 @@ export async function buildReminderMessage(
   stage: ReminderStage,
   useAI: boolean = false
 ): Promise<string> {
+  const config = await loadConfig();
   const template = await loadTemplate(stage);
-  const filled = fillTemplate(template, vaccine, stage);
+  const filled = fillTemplate(template, vaccine, stage, {
+    cta: config?.cta,
+    optOut: config?.optOut,
+  });
 
   if (useAI && ANTHROPIC_API_KEY) {
     return enrichWithAI(vaccine, stage, filled);
