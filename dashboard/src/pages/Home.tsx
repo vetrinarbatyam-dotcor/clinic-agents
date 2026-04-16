@@ -2,6 +2,7 @@ import { apiFetch } from '../api';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../supabase';
+import { useAgentHealth, healthKeyFor, statusButtonClass } from '../hooks/useAgentHealth';
 
 const DESCRIPTIONS: Record<string, string> = {
   'appointment-booker': 'קביעה אוטומטית של תורים בוואטסאפ — חיסונים/בדיקות/ניתוחים',
@@ -87,16 +88,66 @@ interface Stats {
   rejected: number;
 }
 
+interface LastRunInfo {
+  last_run_at: string | null;
+  status: string;
+  error: string | null;
+}
+
 type ViewMode = 'grid' | 'list';
+
+function relativeTime(iso: string | null): string {
+  if (!iso) return 'טרם רץ';
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'עכשיו';
+  if (mins < 60) return `לפני ${mins} דק׳`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `לפני ${hours} שע׳`;
+  return `לפני ${Math.floor(hours / 24)} ימים`;
+}
+
+function lastRunColor(info: LastRunInfo | undefined): string {
+  if (!info || !info.last_run_at) return 'text-gray-400';
+  if (info.status === 'error') return 'text-red-500';
+  const hours = (Date.now() - new Date(info.last_run_at).getTime()) / 3600000;
+  if (hours < 2) return 'text-emerald-500';
+  if (hours < 24) return 'text-amber-500';
+  return 'text-red-500';
+}
 
 export default function Home() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [stats, setStats] = useState<Record<string, Stats>>({});
+  const [lastRuns, setLastRuns] = useState<Record<string, LastRunInfo>>({});
+  const [confirmRate, setConfirmRate] = useState<number | null>(null);
+  const [conversionRate, setConversionRate] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  const { data: health, ack: ackHealth } = useAgentHealth();
 
   useEffect(() => {
     loadAgents();
+    loadLastRuns();
+    loadRates();
   }, []);
+
+  async function loadLastRuns() {
+    try {
+      const res = await apiFetch(`http://${window.location.hostname}:8000/api/agents/last-runs`);
+      if (res.ok) setLastRuns(await res.json());
+    } catch {}
+  }
+
+  async function loadRates() {
+    try {
+      const res = await apiFetch(`http://${window.location.hostname}:8000/api/agents/confirmation-rate`);
+      if (res.ok) { const d = await res.json(); setConfirmRate(d.rate); }
+    } catch {}
+    try {
+      const res = await apiFetch(`http://${window.location.hostname}:8000/api/agents/appointment_booker/outbound_queue/stats`);
+      if (res.ok) { const d = await res.json(); setConversionRate(d.conversion_rate); }
+    } catch {}
+  }
 
   async function loadAgents() {
     const { data } = await supabase.from('agents').select('*');
@@ -118,7 +169,13 @@ export default function Home() {
           continue;
         }
         if (agent.name === 'appointment-booker') {
-          setStats(prev => ({ ...prev, [agent.id]: { pending: 0, sent: 0, rejected: 0 } }));
+          try {
+            const res = await apiFetch(`http://${window.location.hostname}:8000/api/agents/appointment_booker/outbound_queue/stats`);
+            if (res.ok) {
+              const d = await res.json();
+              setStats(prev => ({ ...prev, [agent.id]: { pending: 0, sent: d.total || 0, rejected: 0 } }));
+            }
+          } catch { setStats(prev => ({ ...prev, [agent.id]: { pending: 0, sent: 0, rejected: 0 } })); }
           continue;
         }
         if (agent.name === 'whatsapp_db') {
@@ -186,7 +243,6 @@ export default function Home() {
   }
 
   function getSettingsLink(agent: Agent): string {
-    // Agents with their own integrated config page (no separate /agent/:id needed)
     if (agent.name === 'appointment-booker') return '/appointment-booker';
     return `/agent/${agent.id}`;
   }
@@ -204,15 +260,39 @@ export default function Home() {
       .filter((a): a is Agent => !!a);
   }
 
-  // Agents not in any category
   function getUncategorized(): Agent[] {
     const allCategorized = CATEGORIES.flatMap(c => c.agents);
     return agents.filter(a => !allCategorized.includes(a.name));
   }
 
+  function renderRateBadge(agent: Agent) {
+    if (agent.name === 'appointment-reminder' && confirmRate !== null) {
+      const color = confirmRate > 70 ? 'text-emerald-600 bg-emerald-50' : confirmRate > 50 ? 'text-amber-600 bg-amber-50' : 'text-red-600 bg-red-50';
+      return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${color}`}>אישור: {confirmRate}%</span>;
+    }
+    if (agent.name === 'appointment-booker' && conversionRate !== null) {
+      const color = conversionRate > 40 ? 'text-emerald-600 bg-emerald-50' : conversionRate > 20 ? 'text-amber-600 bg-amber-50' : 'text-red-600 bg-red-50';
+      return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${color}`}>המרה: {conversionRate}%</span>;
+    }
+    return null;
+  }
+
+  function renderLastRun(agent: Agent) {
+    const lr = lastRuns[agent.name];
+    const color = lastRunColor(lr);
+    return (
+      <div className="flex items-center gap-2 text-xs">
+        <span className={color}>● {relativeTime(lr?.last_run_at ?? null)}</span>
+        {lr?.status === 'error' && <span className="text-red-500 font-medium">⚠ שגיאה</span>}
+        {renderRateBadge(agent)}
+      </div>
+    );
+  }
+
   function renderGridCard(agent: Agent, isVaccine: boolean) {
     const s = stats[agent.id] || { pending: 0, sent: 0, rejected: 0 };
     const icon = AGENT_ICONS[agent.name] || '🤖';
+    const h = health[healthKeyFor(agent.name)];
     return (
       <div key={agent.id} className="bg-white rounded-xl border shadow-sm p-5">
         <div className="flex items-start justify-between mb-3">
@@ -233,7 +313,7 @@ export default function Home() {
             {agent.is_active ? 'פעיל' : 'כבוי'}
           </button>
         </div>
-        <div className="flex gap-4 text-sm mb-4">
+        <div className="flex gap-4 text-sm mb-3">
           <div className="flex items-center gap-1">
             <span className="text-amber-500">⏳</span>
             <span>{s.pending} ממתינות</span>
@@ -247,10 +327,14 @@ export default function Home() {
             <span>{s.rejected} נדחו</span>
           </div>
         </div>
-        <div className="text-xs text-gray-400 mb-4">תזמון: {agent.cron_schedule}</div>
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-xs text-gray-400">תזמון: {agent.cron_schedule}</span>
+          {renderLastRun(agent)}
+        </div>
         <div className="flex gap-2">
           <Link to={getMainLink(agent)}
-            className="flex-1 text-center px-3 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">
+            title={h?.reasons?.length ? h.reasons.join('\n') : undefined}
+            className={`flex-1 text-center px-3 py-2 text-white rounded-lg text-sm font-medium ${statusButtonClass(h?.status)}`}>
             {getMainLabel(agent, s.pending)}
           </Link>
           {!isVaccine && (
@@ -259,18 +343,27 @@ export default function Home() {
             </Link>
           )}
         </div>
+        {h?.status === 'red' && !h.acked && (
+          <button
+            onClick={() => ackHealth(healthKeyFor(agent.name), 24)}
+            className="mt-2 text-xs text-red-700 underline hover:text-red-900"
+          >
+            השתקה 24ש"
+          </button>
+        )}
       </div>
     );
   }
 
   function renderListHeader() {
     return (
-      <div className="grid grid-cols-[2.5rem_11rem_1fr_4rem_13rem_5.5rem_11rem] items-center gap-3 px-5 py-2 text-[11px] text-gray-400 font-medium border-b">
+      <div className="grid grid-cols-[2.5rem_11rem_1fr_4rem_13rem_7rem_5.5rem_11rem] items-center gap-3 px-5 py-2 text-[11px] text-gray-400 font-medium border-b">
         <div></div>
         <div>סוכן</div>
         <div className="hidden lg:block">תיאור</div>
         <div className="text-center">סטטוס</div>
         <div className="text-center">נתונים</div>
+        <div className="text-center">הרצה אחרונה</div>
         <div className="text-center hidden md:block">תזמון</div>
         <div className="text-center">פעולות</div>
       </div>
@@ -279,27 +372,23 @@ export default function Home() {
 
   function renderListRow(agent: Agent, isVaccine: boolean) {
     const s = stats[agent.id] || { pending: 0, sent: 0, rejected: 0 };
+    const h = health[healthKeyFor(agent.name)];
     const icon = AGENT_ICONS[agent.name] || '🤖';
     const total = s.pending + s.sent + s.rejected;
     const successRate = total > 0 ? Math.round((s.sent / total) * 100) : 0;
+    const lr = lastRuns[agent.name];
+    const lrColor = lastRunColor(lr);
 
     return (
-      <div key={agent.id} className="bg-white rounded-lg border shadow-sm px-5 py-4 grid grid-cols-[2.5rem_11rem_1fr_4rem_13rem_5.5rem_11rem] items-center gap-3">
-        {/* Icon */}
+      <div key={agent.id} className="bg-white rounded-lg border shadow-sm px-5 py-4 grid grid-cols-[2.5rem_11rem_1fr_4rem_13rem_7rem_5.5rem_11rem] items-center gap-3">
         <span className="text-2xl text-center">{icon}</span>
-
-        {/* Name */}
         <div>
           <h2 className="font-bold text-sm leading-tight">{agent.display_name}</h2>
           <p className="text-[10px] text-gray-400 mt-0.5">{agent.name}</p>
         </div>
-
-        {/* Description — allow 2 lines */}
         <div className="hidden lg:block">
           <p className="text-xs text-gray-500 leading-relaxed line-clamp-2">{DESCRIPTIONS[agent.name] || ''}</p>
         </div>
-
-        {/* Status badge */}
         <div className="text-center">
           <button
             onClick={() => toggleAgent(agent)}
@@ -310,8 +399,6 @@ export default function Home() {
             {agent.is_active ? 'פעיל' : 'כבוי'}
           </button>
         </div>
-
-        {/* Stats */}
         <div className="flex items-center justify-center gap-4 text-xs">
           <span className="flex items-center gap-1 text-amber-600 w-12 justify-end">
             {s.pending} <span>⏳</span>
@@ -326,16 +413,19 @@ export default function Home() {
             {total > 0 ? `${successRate}%` : '—'}
           </span>
         </div>
-
-        {/* Schedule */}
+        <div className="text-center">
+          <span className={`text-[11px] ${lrColor}`}>
+            {lr?.status === 'error' && '⚠ '}{relativeTime(lr?.last_run_at ?? null)}
+          </span>
+          {renderRateBadge(agent) && <div className="mt-0.5">{renderRateBadge(agent)}</div>}
+        </div>
         <div className="text-[11px] text-gray-400 text-center hidden md:block">
           {agent.cron_schedule}
         </div>
-
-        {/* Actions */}
         <div className="flex gap-2 justify-center">
           <Link to={getMainLink(agent)}
-            className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 whitespace-nowrap">
+            title={h?.reasons?.length ? h.reasons.join('\n') : undefined}
+            className={`px-3 py-1.5 text-white rounded-lg text-xs font-medium whitespace-nowrap ${statusButtonClass(h?.status)}`}>
             {getMainLabel(agent, s.pending)}
           </Link>
           {!isVaccine && (
@@ -378,7 +468,6 @@ export default function Home() {
 
   return (
     <div dir="rtl">
-      {/* Header with view toggle */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">סוכנים</h1>
         <div className="flex items-center bg-gray-100 rounded-lg p-1">
