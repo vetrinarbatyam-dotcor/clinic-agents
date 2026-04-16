@@ -46,7 +46,8 @@ HEBREW_DAYS_FULL = {
 
 def build_system_prompt(customer_name: str, pet_name: str, vaccine_name: str,
                         free_slots: list, duration_min: int,
-                        working_hours_summary: str, today_str: str) -> str:
+                        working_hours_summary: str, today_str: str,
+                        pet_type: str = "", no_appointment_info: dict = None) -> str:
     """Build the system prompt with all context."""
     slots_by_day = {}
     for s in free_slots:
@@ -58,6 +59,42 @@ def build_system_prompt(customer_name: str, pet_name: str, vaccine_name: str,
         lines.append(f"- {day}: " + ", ".join(shown))
     slots_text = "\n".join(lines) if lines else "(אין סלוטים פנויים)"
 
+    pet_line = f"חיה ({pet_type}): {pet_name}" if pet_type else f"חיה: {pet_name}"
+    if vaccine_name:
+        vaccine_line = f"- חיסון/טיפול נדרש: {vaccine_name} (משך {duration_min} דקות)"
+    else:
+        vaccine_line = "- הלקוח פנה מיוזמתו — לא הוזכרה בקשה ספציפית. שאל בעדינות במה אפשר לעזור."
+    no_appt_block = ""
+    if no_appointment_info and no_appointment_info.get("keywords"):
+        kw = ", ".join(no_appointment_info.get("keywords") or [])
+        msg = no_appointment_info.get("message") or ""
+        if vaccine_name:
+            # Cross-sell: client has an open vaccine reminder — combine into an appointment CTA
+            no_appt_block = (
+                f"\n\nמוצרים/שירותים מסוג זה (ברבקטו/סימפריקה/הדברה וכו'):"
+                f"\n- מילות מפתח: {kw}"
+                f"\n- אסטרטגיה: ללקוח יש תזכורת פתוחה לחיסון ({vaccine_name}). *אל* תענה שאין צורך בתור — במקום זה הצע לשלב: offer_slot לחיסון, ובהודעה ציין שכשיגיעו נוכל להמליץ על מוצר ההדברה המתאים מתוך מגוון."
+                f"\n- דוגמת תשובה: 'בטח! כשתבואו לחיסון {vaccine_name} ליפצוק נמליץ לך על מוצר ההדברה המתאים — יש כמה אופציות. מתי נוח לך לבוא?'"
+                f"\n- action=offer_slot (לא no_appointment) כי המטרה היא להביא את הלקוח למרפאה."
+            )
+        else:
+            # No open vaccine — pure informational response
+            no_appt_block = (
+                f"\n\nמוצרים/שירותים ללא צורך בתור (action=no_appointment):"
+                f"\n- מילות מפתח: {kw}"
+                f"\n- תשובה ללקוח: {msg} (צרף שעות פעילות מהרשימה למעלה)"
+                f"\n- אם בהמשך הלקוח מזכיר צורך בבדיקה/התייעצות רחבה יותר — מותר להציע לקבוע תור רגיל."
+            )
+
+    medical_block = (
+        "\n\nבעיות רפואיות (action=handoff — לא תור חיסון):"
+        "\n- סימני אזהרה: מקיא, משלשל, לא אוכל, לא שותה, לא מרגיש טוב, אפתי, חולה, כאבים, חום, פציעה, דם, נפיחות, קשיי נשימה, צולע, כל תלונה רפואית לא שגרתית."
+        "\n- יוצאים מהכלל (אפשר להציע תור רגיל): גרד, ליקוקים בלבד בלי סימפטום אחר, חיסון שנתי, בדיקה שגרתית."
+        "\n- חשוב: אתה עצמך אלכס המזכירה הדיגיטלית — אל תפנה את הלקוח אליך. הפנה רק לצוות האנושי."
+        "\n- תשובה ללקוח: 'היי 🐾 זה לא הערוץ המתאים לבעיה רפואית. חשוב שתיצור קשר עם המרפאה:\\n📞 טלפון: 035513649 (עד 19:30)\\n💬 או וואטסאפ לאותו מספר\\nצוות המרפאה יחזור אליך מהר יותר ככה 🙏'"
+        "\n- תמיד להעביר את האחריות ליצירת קשר אל הלקוח — לא להבטיח שמישהו יחזור אוטומטית."
+    )
+
     prompt = f"""אתה סוכן AI של מרפאה וטרינרית. אתה מדבר עברית טבעית עם לקוחות בוואטסאפ ומסייע להם לקבוע תורים לחיסונים.
 
 היום: {today_str}
@@ -67,8 +104,8 @@ def build_system_prompt(customer_name: str, pet_name: str, vaccine_name: str,
 
 הלקוח:
 - שם: {customer_name}
-- חיה: {pet_name}
-- חיסון נדרש: {vaccine_name} (משך {duration_min} דקות)
+- {pet_line}
+{vaccine_line}{no_appt_block}{medical_block}
 
 תורים פנויים בימים הקרובים (כל שורה: יום תאריך, שעות פנויות עם ISO בסוגריים מחודדים):
 {slots_text}
@@ -88,7 +125,7 @@ def build_system_prompt(customer_name: str, pet_name: str, vaccine_name: str,
 - "ערב" = 17:00 ואילך
 - "מחר" = היום הבא שבו המרפאה פתוחה
 
-חובה: בחר ISO רק מתוך הרשימה למעלה. אל תמציא תאריכים/שעות. אם אין סלוט שמתאים להעדפה — הצע את הקרוב ביותר והסבר בקצרה.
+חובה חמורה: בחר slot_iso אך ורק מתוך הרשימה 'תורים פנויים' למעלה — העתק את ה-ISO בדיוק כפי שמופיע בסוגריים <...>. אל תמציא שעות/תאריכים שאינם ברשימה, גם אם הלקוח מבקש זמן שלא פנוי. אם אין סלוט שמתאים להעדפה — בחר מהרשימה את הקרוב ביותר והסבר בקצרה שזה מה שפנוי.
 
 תגובה: הגב אך ורק ב-JSON תקף, בלי טקסט מסביב, בלי markdown code block:
 {{
@@ -102,7 +139,9 @@ def build_system_prompt(customer_name: str, pet_name: str, vaccine_name: str,
 - לקוח אומר "שני בערב" → חפש סלוט ביום שני אחרי 17:00 → החזר offer_slot עם ה-ISO
 - לקוח אומר "כן" אחרי offer_slot → החזר book עם אותו ISO של ההצעה הקודמת (ראה בהיסטוריה)
 - לקוח אומר "לא" → הצע אחר באותה העדפה
-- לקוח שואל על מחיר/חיסון מיוחד → handoff
+- לקוח מדווח סימפטום רפואי (מקיא/חולה/אפתי/לא אוכל/משלשל וכו') → handoff עם ההודעה הרפואית המוכנה
+- לקוח שואל על מחיר → handoff
+- לקוח שואל על מוצר מרשימת ה-no_appointment: אם יש לו חיסון פתוח → offer_slot עם הודעה cross-sell ('תבואו לחיסון ונמליץ על הדברה'). אם אין חיסון פתוח → no_appointment עם ההודעה המוכנה + שעות פעילות.
 - לקוח בלבול/חוזר על עצמו שלוש פעמים → handoff
 - אחרי הזמנה מוצלחת → done"""
     return prompt
@@ -250,8 +289,8 @@ def process_message(session, text, config, outbound_info: dict) -> dict:
 
     phone = session["phone"]
     customer_name = outbound_info.get("customer_name", "לקוח")
-    pet_name = outbound_info.get("pet_name", "החיה")
-    vaccine_name = outbound_info.get("vaccine_name", "משושה")
+    pet_name = outbound_info.get("pet_name") or "החיה"
+    vaccine_name = outbound_info.get("vaccine_name") or ""
     pet_id = outbound_info.get("pet_id")
     patient_id = outbound_info.get("patient_id")
     treatment_id = outbound_info.get("treatment_id", 3338)
@@ -276,7 +315,7 @@ def process_message(session, text, config, outbound_info: dict) -> dict:
 
     try:
         free_slots = tools.get_free_slots(
-            calendar_id, config, days=7, duration_min=duration_min
+            calendar_id, config, days=getattr(config, 'days_ahead', 30), duration_min=duration_min
         )
         valid_isos = {s["iso"] for s in free_slots}
     except Exception as e:
@@ -303,6 +342,26 @@ def process_message(session, text, config, outbound_info: dict) -> dict:
     for en, he in HEB_WEEKDAY_EN_HE.items():
         today_str = today_str.replace(en, he)
 
+    pet_type = outbound_info.get("pet_type", "") or ""
+    no_appt_info = None
+    try:
+        vc = getattr(config, "vaccine_categories", None) or {}
+        if isinstance(vc, dict):
+            na = vc.get("no_appointment")
+            if na is not None:
+                if isinstance(na, dict):
+                    no_appt_info = {
+                        "keywords": na.get("keywords") or [],
+                        "message": na.get("message") or "",
+                    }
+                else:
+                    no_appt_info = {
+                        "keywords": getattr(na, "keywords", []) or [],
+                        "message": getattr(na, "message", "") or "",
+                    }
+    except Exception:
+        no_appt_info = None
+
     system_prompt = build_system_prompt(
         customer_name=customer_name,
         pet_name=pet_name,
@@ -311,6 +370,8 @@ def process_message(session, text, config, outbound_info: dict) -> dict:
         duration_min=duration_min,
         working_hours_summary=wh_summary,
         today_str=today_str,
+        pet_type=pet_type,
+        no_appointment_info=no_appt_info,
     )
 
     llm_result = call_claude(system_prompt, history, text, timeout_sec=60)
@@ -429,9 +490,26 @@ def process_message(session, text, config, outbound_info: dict) -> dict:
         try:
             from shared import whatsapp_sender as wa_gateway
             if getattr(config, "alert_on_handoff", False) and getattr(config, "team_alert_phone", None):
+                MEDICAL_KW = [
+                    "מקיא", "הקיא", "משלשל", "שלשול", "חולה", "אפתי", "אפטי",
+                    "לא אוכל", "לא שותה", "לא מרגיש", "כאב", "כואב", "חום",
+                    "פציעה", "נפצע", "דם", "מדמם", "נפיחות", "נפוח",
+                    "קשיי נשימה", "נושם", "צולע", "לא זז", "רועד", "עייף"
+                ]
+                tl = (text or "").lower()
+                is_medical = any(kw in tl for kw in MEDICAL_KW)
+                header = "🚨 *רפואי דחוף*" if is_medical else "🔔 *handoff*"
+                alert_msg = (
+                    f"{header}\n"
+                    f"לקוח: {customer_name or '—'}\n"
+                    f"טלפון: {phone}\n"
+                    f"חיה: {pet_name}\n"
+                    f"ההודעה שלו: \"{text[:200]}\"\n"
+                    f"👉 חזור אליו בהקדם"
+                )
                 wa_gateway.send(
                     to=config.team_alert_phone,
-                    message=f"🔔 [appt_booker] handoff LLM — {phone} ({pet_name}): {text[:80]}",
+                    message=alert_msg,
                     category="alert",
                     agent="appointment_booker",
                 )

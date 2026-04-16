@@ -154,67 +154,6 @@ Bun.serve({
         return new Response(JSON.stringify(rows), { headers: CORS });
       }
 
-      // GET /api/prices/top-sellers-by-period?period=1m|3m|6m|12m&limit=N
-      // Returns per-item stats for the chosen period + diff vs. previous equal period
-      if (url.pathname === '/api/prices/top-sellers-by-period') {
-        const period = url.searchParams.get('period') || '1m';
-        const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
-        const monthsMap: Record<string, number> = { '1m': 1, '3m': 3, '6m': 6, '12m': 12 };
-        const months = monthsMap[period];
-        if (!months) {
-          return new Response(JSON.stringify({ error: 'invalid period' }), { status: 400, headers: CORS });
-        }
-        const { rows } = await pool.query(`
-          WITH current_p AS (
-            SELECT item_name, field_id,
-              COUNT(*) AS times_sold,
-              SUM(amount) AS total_quantity,
-              SUM(total) AS total_revenue,
-              AVG(price) AS avg_price
-            FROM visit_items
-            WHERE price > 0
-              AND visit_date >= CURRENT_DATE - ($1 || ' months')::interval
-            GROUP BY item_name, field_id
-          ),
-          prev_p AS (
-            SELECT item_name, field_id,
-              COUNT(*) AS times_sold_prev,
-              SUM(amount) AS total_quantity_prev,
-              SUM(total) AS total_revenue_prev
-            FROM visit_items
-            WHERE price > 0
-              AND visit_date >= CURRENT_DATE - ($2 || ' months')::interval
-              AND visit_date <  CURRENT_DATE - ($1 || ' months')::interval
-            GROUP BY item_name, field_id
-          )
-          SELECT
-            c.item_name,
-            c.field_id,
-            c.times_sold,
-            c.total_quantity,
-            c.total_revenue,
-            c.avg_price,
-            COALESCE(p.times_sold_prev, 0)       AS times_sold_prev,
-            COALESCE(p.total_quantity_prev, 0)   AS total_quantity_prev,
-            COALESCE(p.total_revenue_prev, 0)    AS total_revenue_prev,
-            (c.total_quantity - COALESCE(p.total_quantity_prev, 0)) AS quantity_diff,
-            CASE
-              WHEN COALESCE(p.total_quantity_prev, 0) = 0 THEN NULL
-              ELSE ROUND(((c.total_quantity - p.total_quantity_prev) / p.total_quantity_prev * 100)::numeric, 1)
-            END AS quantity_diff_pct,
-            (c.total_revenue - COALESCE(p.total_revenue_prev, 0)) AS revenue_diff,
-            CASE
-              WHEN COALESCE(p.total_revenue_prev, 0) = 0 THEN NULL
-              ELSE ROUND(((c.total_revenue - p.total_revenue_prev) / p.total_revenue_prev * 100)::numeric, 1)
-            END AS revenue_diff_pct
-          FROM current_p c
-          LEFT JOIN prev_p p USING (item_name, field_id)
-          ORDER BY c.total_revenue DESC
-          LIMIT $3
-        `, [months, months * 2, limit]);
-        return new Response(JSON.stringify({ period, months, rows }), { headers: CORS });
-      }
-
       // GET /api/prices/history?limit=N&field_id=X
       if (url.pathname === '/api/prices/history') {
         const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);

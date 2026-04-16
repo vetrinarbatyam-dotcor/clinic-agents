@@ -8,6 +8,7 @@ import { buildMessage } from './message-builder';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const DEEP_SCAN = process.argv.includes('--deep-scan');
+const FROM_CRON = process.argv.includes('--cron');
 const GIL_PHONE = '0543123419';
 
 function parseYearsArg(): number {
@@ -39,6 +40,17 @@ async function run() {
   }
 
   const config = agent.config || {};
+
+  // Double-toggle gate: when invoked from cron (--cron), BOTH flags must be on in DB.
+  // Manual runs (without --cron) bypass this gate. This prevents accidental automated
+  // runs while allowing on-demand operation from dashboard/CLI.
+  if (FROM_CRON) {
+    if (!config.cron_enabled || !config.cron_confirmed) {
+      console.log(`[remind] --cron invocation blocked: cron_enabled=${!!config.cron_enabled}, cron_confirmed=${!!config.cron_confirmed}. Set BOTH to true in remind-agent config to enable scheduled runs.`);
+      return;
+    }
+    console.log('[remind] --cron invocation passed double-toggle gate.');
+  }
   let grouped;
   let category: 'vaccine-expired' | 'deep-scan';
 

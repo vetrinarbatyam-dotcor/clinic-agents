@@ -302,19 +302,6 @@ async function sendSummaryToGil(
   );
   const s = stats[0] || {};
 
-  // Debt accumulations over time windows (net delta from debt_history)
-  const { rows: periodRows } = await pool.query(
-    `SELECT
-       COALESCE(SUM(CASE WHEN recorded_at >= NOW() - INTERVAL '7 days'  THEN amount - COALESCE(previous_amount,0) END),0) AS week,
-       COALESCE(SUM(CASE WHEN recorded_at >= NOW() - INTERVAL '30 days' THEN amount - COALESCE(previous_amount,0) END),0) AS month,
-       COALESCE(SUM(CASE WHEN recorded_at >= NOW() - INTERVAL '90 days' THEN amount - COALESCE(previous_amount,0) END),0) AS three_months,
-       COALESCE(SUM(CASE WHEN recorded_at >= DATE_TRUNC('year', NOW())  THEN amount - COALESCE(previous_amount,0) END),0) AS ytd,
-       COALESCE(SUM(CASE WHEN recorded_at >= NOW() - INTERVAL '365 days' THEN amount - COALESCE(previous_amount,0) END),0) AS year
-     FROM debt_history`
-  );
-  const p = periodRows[0] || {};
-  const fmt = (v: any) => `₪${Math.round(parseFloat(v || 0)).toLocaleString()}`;
-
   const top5Lines = top5.map((r: any, i: number) =>
     `${i + 1}. ${r.first_name} ${r.last_name} — ₪${Math.round(r.amount).toLocaleString()}`
   ).join('\n');
@@ -325,11 +312,6 @@ async function sendSummaryToGil(
 👥 לקוחות חייבים: ${s.total_clients || 0}
 🔴 מעל ₪1,000: ${s.over_1000 || 0}
 🟡 מעל ₪500: ${s.over_500 || 0}
-
-📈 הצטברות חובות:
-• שבוע אחרון: ${fmt(p.week)}
-• חודש אחרון: ${fmt(p.month)}
-• 3 חודשים אחרונים: ${fmt(p.three_months)}
 
 🏆 TOP 5:
 ${top5Lines}`;

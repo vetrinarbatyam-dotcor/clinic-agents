@@ -25,6 +25,7 @@ export interface ApptReminderConfig {
   alert_team_on_cancel: boolean;
   alert_team_on_unknown_reply: boolean;
   team_alert_phone: string;
+  cancel_alert_threshold: number;
   test_mode: boolean;
   test_phone_whitelist: string[];
 }
@@ -59,6 +60,7 @@ export const DEFAULT_CONFIG: ApptReminderConfig = {
   alert_team_on_cancel: true,
   alert_team_on_unknown_reply: true,
   team_alert_phone: TEAM_PHONE,
+  cancel_alert_threshold: 30,
   test_mode: false,
   test_phone_whitelist: ['0543123419', '0549127030'],
 };

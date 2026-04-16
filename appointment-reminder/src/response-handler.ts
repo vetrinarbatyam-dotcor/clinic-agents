@@ -1,3 +1,4 @@
+import { detectOptOut, addOptOut } from "../../shared/opt-out";
 import { callAsmx } from '../../shared/clinica';
 import { pool, loadConfig, logRun } from './db';
 import { DEFAULT_CONFIG, type ApptReminderConfig } from './config';
@@ -21,10 +22,24 @@ export async function handleIncomingReply(phone: string, msg: string) {
   }
 
   const norm = msg.trim().toLowerCase();
+
+  // -- Opt-out detection --
+  if (detectOptOut(msg)) {
+    await addOptOut(phone, { reason: msg, via: 'auto_reply' });
+    if (cfg.mode === 'live') {
+      await sendWhatsApp(phone, 'קיבלנו. הוסרת מרשימת התפוצה שלנו ולא תקבל/י הודעות נוספות. תודה!', { skipOptOutCheck: true });
+      await sendWhatsApp(cfg.team_alert_phone || '0543123419', '🚫 לקוח ביקש opt-out: ' + phone + ' — הודעה: "' + msg + '"', { skipOptOutCheck: true });
+    }
+    await pool.query('UPDATE appt_reminders_sent SET status=$2, replied_at=NOW(), reply_text=$3 WHERE id=$1', [recent.id, 'opted_out', msg]);
+    await logRun('reply_opt_out', phone, { msg });
+    return { matched: true, action: 'opted_out' };
+  }
+
   const eventId = Number(recent.event_id);
 
   if (['1', 'כן', 'מאשר', 'מאשרת'].includes(norm)) {
-    await callAsmx('setConfirmed', { EventID: eventId });
+    try { await callAsmx('setConfirmed', { EventID: eventId }); }
+    catch (e) { console.error('[response-handler] setConfirmed failed:', e instanceof Error ? e.message : e); await logRun('clinica_error', phone, { event_id: eventId, op: 'setConfirmed', err: e instanceof Error ? e.message : String(e) }); }
     await pool.query(`UPDATE appt_reminders_sent SET status='confirmed', replied_at=NOW(), reply_text=$2 WHERE id=$1`, [recent.id, msg]);
     if (cfg.mode === 'live') await sendWhatsApp(phone, cfg.reply_confirmed);
     await logRun('reply_confirmed', phone, { event_id: eventId });
@@ -32,7 +47,8 @@ export async function handleIncomingReply(phone: string, msg: string) {
   }
 
   if (['3', 'בטל', 'לבטל', 'ביטול'].includes(norm)) {
-    await callAsmx('CancelEvent', { EventID: eventId, eventType: 1, creator: 0 });
+    try { await callAsmx('CancelEvent', { EventID: eventId, eventType: 1, creator: 0 }); }
+    catch (e) { console.error('[response-handler] CancelEvent failed:', e instanceof Error ? e.message : e); await logRun('clinica_error', phone, { event_id: eventId, op: 'CancelEvent', err: e instanceof Error ? e.message : String(e) }); }
     await pool.query(`UPDATE appt_reminders_sent SET status='canceled', replied_at=NOW(), reply_text=$2 WHERE id=$1`, [recent.id, msg]);
     if (cfg.mode === 'live') {
       await sendWhatsApp(phone, cfg.reply_canceled);
@@ -59,7 +75,8 @@ export async function handleIncomingReply(phone: string, msg: string) {
     if (classification && classification.intent !== 'unknown') {
       // Claude understood the intent — route accordingly
       if (classification.intent === 'confirm') {
-        await callAsmx('setConfirmed', { EventID: eventId });
+        try { await callAsmx('setConfirmed', { EventID: eventId }); }
+        catch (e) { console.error('[response-handler] setConfirmed (AI) failed:', e instanceof Error ? e.message : e); await logRun('clinica_error', phone, { event_id: eventId, op: 'setConfirmed', via: 'ai', err: e instanceof Error ? e.message : String(e) }); }
         await pool.query(`UPDATE appt_reminders_sent SET status='confirmed', replied_at=NOW(), reply_text=$2 WHERE id=$1`, [recent.id, msg]);
         if (cfg.mode === 'live') await sendWhatsApp(phone, classification.human_response);
         await logRun('reply_confirmed_ai', phone, { event_id: eventId, original: msg, ai_intent: 'confirm' });
@@ -67,7 +84,8 @@ export async function handleIncomingReply(phone: string, msg: string) {
       }
 
       if (classification.intent === 'cancel') {
-        await callAsmx('CancelEvent', { EventID: eventId, eventType: 1, creator: 0 });
+        try { await callAsmx('CancelEvent', { EventID: eventId, eventType: 1, creator: 0 }); }
+        catch (e) { console.error('[response-handler] CancelEvent (AI) failed:', e instanceof Error ? e.message : e); await logRun('clinica_error', phone, { event_id: eventId, op: 'CancelEvent', via: 'ai', err: e instanceof Error ? e.message : String(e) }); }
         await pool.query(`UPDATE appt_reminders_sent SET status='canceled', replied_at=NOW(), reply_text=$2 WHERE id=$1`, [recent.id, msg]);
         if (cfg.mode === 'live') {
           await sendWhatsApp(phone, classification.human_response);
@@ -82,6 +100,17 @@ export async function handleIncomingReply(phone: string, msg: string) {
         if (cfg.mode === 'live') await sendWhatsApp(phone, classification.human_response);
         await logRun('reply_snoozed_ai', phone, { event_id: eventId, original: msg, ai_intent: 'snooze' });
         return { matched: true, action: 'snoozed', via: 'ai' };
+      }
+
+      if (classification.intent === 'opt_out') {
+        await addOptOut(phone, { reason: msg, via: 'auto_reply' });
+        await pool.query(`UPDATE appt_reminders_sent SET status='opted_out', replied_at=NOW(), reply_text=$2 WHERE id=$1`, [recent.id, msg]);
+        if (cfg.mode === 'live') {
+          await sendWhatsApp(phone, 'קיבלנו. הוסרת מרשימת התפוצה שלנו ולא תקבל/י הודעות נוספות. תודה!', { skipOptOutCheck: true });
+          await sendWhatsApp(cfg.team_alert_phone || '0543123419', '🚫 לקוח ביקש opt-out (AI): ' + phone + ' — "' + msg + '"', { skipOptOutCheck: true });
+        }
+        await logRun('reply_opt_out_ai', phone, { event_id: eventId, original: msg, ai_intent: 'opt_out' });
+        return { matched: true, action: 'opted_out', via: 'ai' };
       }
     }
 

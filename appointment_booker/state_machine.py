@@ -59,6 +59,44 @@ def _outbound_pending(phone: str) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def _lookup_client_in_clinica(phone: str) -> Optional[dict]:
+    """Advisor/cold-inbound fallback: look up client by phone in ClinicaOnline.
+
+    Returns None if not found. Populates pet_id/patient_id when no
+    outbound_queue row exists (fixes #2: CreateEvent 500 when cold inbound).
+    Also covers #6: when a prior booking flipped queue to 'booked', the live
+    client lookup still works.
+    """
+    try:
+        from clinica import appointments as _appt
+        from clinica.auth import call_asmx
+        _PET_TYPE_HE = {"Dog": "כלב", "dog": "כלב", "Cat": "חתול", "cat": "חתול",
+                         "Rabbit": "ארנב", "rabbit": "ארנב"}
+        clients = _appt.search_by_phone(phone)
+        if not clients:
+            return None
+        c = clients[0]
+        user_id = c.get("UserID")
+        if not user_id:
+            return None
+        nm = ((c.get("FirstName") or "") + " " + (c.get("LastName") or "")).strip()
+        pets = call_asmx("GetPatientPets", {"userid": user_id}) or []
+        if not pets:
+            return {"patient_id": user_id, "customer_name": nm or ""}
+        pet = pets[0]
+        raw_type = (pet.get("Type") or "").strip()
+        return {
+            "patient_id": user_id,
+            "customer_name": nm,
+            "pet_id": pet.get("PetID"),
+            "pet_name": pet.get("Name") or "",
+            "pet_type": _PET_TYPE_HE.get(raw_type, raw_type),
+        }
+    except Exception:
+        log.exception("[appt_booker] _lookup_client_in_clinica failed")
+        return None
+
+
 def _update_outbound_response(phone, response_text, new_status=None):
     """Mark the latest outbound queue entry as responded by the client."""
     try:
@@ -202,10 +240,32 @@ def _prepare_session(phone: str, config):
 
     session = get_active_session(phone)
 
+    # If the previous session ended with a successful booking (DONE), auto-reset:
+    # let the client start a new conversation without being ignored.
+    if session and session.get("state") in (S_DONE, "DONE"):
+        from shared.session_manager import expire_session
+        expire_session(session["id"])
+        session = None
+
     if not session:
         outbound = _outbound_pending(phone)
         path = "fast" if outbound else "advisor"
         session = create_session(phone, ttl_min=config.session_ttl_min, path=path)
+        if not outbound:
+            clinic_info = _lookup_client_in_clinica(phone)
+            if clinic_info and clinic_info.get("pet_id"):
+                ctx = {
+                    "advisor_mode": True,
+                    "outbound_pet_id": clinic_info.get("pet_id"),
+                    "outbound_pet_name": clinic_info.get("pet_name"),
+                    "advisor_pet_type": clinic_info.get("pet_type") or "",
+                    "advisor_customer_name": clinic_info.get("customer_name") or "",
+                    "patient_id": str(clinic_info.get("patient_id")),
+                }
+                update_session(session["id"], context=ctx,
+                               patient_id=clinic_info.get("patient_id"),
+                               pet_ids=[clinic_info.get("pet_id")])
+                session = get_active_session(phone)
         if outbound:
             ctx = {"outbound_id": outbound["id"], "treatment_key": outbound["treatment_key"]}
             if outbound.get("vaccine_name"):
@@ -228,16 +288,17 @@ def _prepare_session(phone: str, config):
             session = get_active_session(phone)
 
     state = session.get("state")
-    if state in (S_HANDOFF, S_DONE, "HANDOFF", "DONE"):
+    if state in (S_HANDOFF, "HANDOFF"):
         _log_event("ignored_terminal_state", phone, {"state": state})
         return None, {"reply": None, "state": state, "action": "ignored_terminal"}
 
     # Build outbound_info
     ctx = _ctx(session)
     outbound_info = {
-        "customer_name": "לקוח",
+        "customer_name": ctx.get("advisor_customer_name") or "לקוח",
         "pet_name": ctx.get("outbound_pet_name") or "החיה",
-        "vaccine_name": ctx.get("outbound_vaccine_name") or "משושה",
+        "pet_type": ctx.get("advisor_pet_type") or "",
+        "vaccine_name": ctx.get("outbound_vaccine_name") or "",
         "pet_id": ctx.get("outbound_pet_id"),
         "patient_id": session.get("patient_id") or ctx.get("patient_id"),
         "treatment_id": 3338,

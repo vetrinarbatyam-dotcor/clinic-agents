@@ -44,9 +44,17 @@ export async function scanAndProcess(opts: { dryRun?: boolean } = {}) {
   console.log(`[scanner] mode=${cfg.mode} target_day=${dayStr}`);
 
   const calId = cfg.target_calendars[0] || VACCINE_CALENDAR;
-  const resp = await callAsmx('GetAllClinicData', {
-    ShowNotActive: 0, sSelected: dayStr, UserID: calId, pannel: 0,
-  });
+  let resp: any;
+  try {
+    resp = await callAsmx('GetAllClinicData', {
+      ShowNotActive: 0, sSelected: dayStr, UserID: calId, pannel: 0,
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error('[scanner] GetAllClinicData failed:', errMsg);
+    await logRun('clinica_error', null, { op: 'GetAllClinicData', err: errMsg });
+    return { scanned: 0, queued: 0, error: errMsg };
+  }
   const events: any[] = resp?.listEvents || [];
   console.log(`[scanner] got ${events.length} events for ${dayStr}`);
 

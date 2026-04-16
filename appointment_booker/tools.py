@@ -51,12 +51,47 @@ def get_free_slots(calendar_id: str, config, days: int = 7, duration_min: int = 
     return all_slots
 
 
+def _lookup_owner_insurance(patient_id: str, pet_id: int) -> dict:
+    """Fetch owner last_name + insurance_name from local synced DB.
+
+    Fast path for enriching calendar events — not super-fresh but good enough.
+    Returns {} if not found or on error.
+    """
+    try:
+        from db import query
+        out = {}
+        if patient_id:
+            rows = query("SELECT first_name, last_name FROM clients WHERE user_id=%s LIMIT 1",
+                         (str(patient_id),))
+            if rows:
+                out["owner_first_name"] = (rows[0].get("first_name") or "").strip()
+                out["owner_last_name"] = (rows[0].get("last_name") or "").strip()
+        if pet_id:
+            rows = query("SELECT insurance_name FROM pets WHERE pet_id=%s LIMIT 1", (int(pet_id),))
+            if rows:
+                out["insurance_name"] = (rows[0].get("insurance_name") or "").strip()
+        return out
+    except Exception as e:
+        log.warning("[tools] owner/insurance lookup failed: %s", e)
+        return {}
+
+
 def book_slot_tool(config, session: dict, iso_datetime: str, pet_id: int, patient_id: str,
                    pet_name: str, vaccine_name: str, treatment_id: int, calendar_id: str,
                    duration_min: int) -> dict:
     """Book a slot via safety.book_with_lock. Returns {ok, event_id?, simulated?, error?}."""
     try:
         begin = datetime.fromisoformat(iso_datetime)
+        enrich = _lookup_owner_insurance(patient_id, pet_id)
+        owner_last = enrich.get("owner_last_name") or ""
+        insurance = enrich.get("insurance_name") or ""
+        # Description shown prominently in calendar view
+        description = f"{pet_name} - {owner_last}" if owner_last else pet_name
+        notes_parts = [vaccine_name]
+        if insurance:
+            notes_parts.append(f"ביטוח: {insurance}")
+        notes_parts.append("[AUTO-LLM]")
+        notes = " | ".join(notes_parts)
         result = safety.book_with_lock(
             config=config,
             treatment_key="vaccine",
@@ -65,11 +100,12 @@ def book_slot_tool(config, session: dict, iso_datetime: str, pet_id: int, patien
             pet_ids=[pet_id],
             begin=begin,
             duration_min=duration_min,
-            description=pet_name,
+            description=description,
             cellphone=session["phone"],
-            notes=f"{vaccine_name} [AUTO-LLM]",
+            notes=notes,
             treatment_id=treatment_id,
             phone_for_rate_limit=session["phone"],
+            insurance_name=insurance,
         )
         return {
             "ok": True,

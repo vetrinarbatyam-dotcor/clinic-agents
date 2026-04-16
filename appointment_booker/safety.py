@@ -47,6 +47,7 @@ def book_with_lock(
     notes: str,
     treatment_id: int,
     phone_for_rate_limit: str,
+    insurance_name: str = "",
 ) -> dict:
     """
     Returns: {event_id, simulated, ...}
@@ -93,6 +94,7 @@ def book_with_lock(
             notes=notes,
             cellphone=cellphone,
             treatment_id=treatment_id,
+            insurance_name=insurance_name,
         )
 
         # 6. Shadow / dry_run
