@@ -17,6 +17,7 @@ import GreenApi from './pages/GreenApi';
 import WhatsAppDB from './pages/WhatsAppDB';
 import ClaudeCLI from './pages/ClaudeCLI';
 import DealCalculator from './pages/DealCalculator';
+import ConversationAuditor from './pages/ConversationAuditor';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -39,6 +40,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="appointment-reminder" element={<AppointmentReminder />} />
           <Route path="cli" element={<ClaudeCLI />} />
           <Route path="deal-calculator" element={<DealCalculator />} />
+          <Route path="auditor" element={<ConversationAuditor />} />
         </Route>
       </Routes>
     </BrowserRouter>

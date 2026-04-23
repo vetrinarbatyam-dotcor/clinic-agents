@@ -87,6 +87,7 @@ export default function App() {
           <Link to="/cli" className="px-3 py-1.5 bg-violet-50 text-violet-700 rounded-lg text-sm font-medium hover:bg-violet-100 transition">⚡ CLI</Link>
           <Link to="/warehouse" className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-100 transition">🗄️ מאגר</Link>
           <Link to="/deal-calculator" className="px-3 py-1.5 bg-amber-50 text-amber-700 rounded-lg text-sm font-medium hover:bg-amber-100 transition">📊 מבצעים</Link>
+          <Link to="/auditor" className="px-3 py-1.5 bg-orange-50 text-orange-700 rounded-lg text-sm font-medium hover:bg-orange-100 transition">🔍 ביקורת שיחות</Link>
         </div>
       </header>
       <main className="max-w-6xl mx-auto px-4 py-6">

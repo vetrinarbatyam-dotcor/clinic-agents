@@ -1,0 +1,23 @@
+{
+  "name": "conversation-booker-auditor",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "api": "bun run src/api.ts",
+    "dry-run": "bun run src/index.ts --dry-run",
+    "create-tables": "bun run scripts/create-tables.ts",
+    "test-today": "bun run test/analyze-today.ts"
+  },
+  "dependencies": {
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pg": "^8.11.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
