@@ -1,0 +1,9 @@
+# Missed-caller agent cron entries — for user: claude-user
+# To activate: sudo -u claude-user crontab -e  and paste the lines below
+# (or: sudo -u claude-user crontab /home/claude-user/clinic-agents/missed-caller/cron.txt)
+#
+# DO NOT ENABLE until dry-run validated by owner.
+
+*/1 * * * *   cd /home/claude-user/clinic-agents/missed-caller && .venv/bin/python messenger.py tick >> logs/tick.log 2>&1
+0 9 * * *     cd /home/claude-user/clinic-agents/missed-caller && .venv/bin/python messenger.py drain-overnight >> logs/tick.log 2>&1
+0 7 * * 0     cd /home/claude-user/clinic-agents/missed-caller && .venv/bin/python weekly_report.py >> logs/tick.log 2>&1

@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ווטרינר בת-ים — דשבורד שיחות</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; }
+    .badge-answered { @apply bg-green-600 text-white text-xs px-2 py-0.5 rounded-full font-bold; }
+    .badge-missed   { @apply bg-red-600 text-white text-xs px-2 py-0.5 rounded-full font-bold; }
+    .badge-busy     { @apply bg-yellow-500 text-black text-xs px-2 py-0.5 rounded-full font-bold; }
+    .pulse-dot { animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .heatmap-cell { width: 2.2rem; height: 2rem; }
+    #modal-overlay { backdrop-filter: blur(2px); }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+<!-- Top Bar -->
+<header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between sticky top-0 z-40">
+  <div class="flex items-center gap-3">
+    <span class="text-2xl">🐾</span>
+    <div>
+      <h1 class="font-bold text-white text-lg leading-tight">ווטרינר בת-ים — דשבורד שיחות</h1>
+      <p class="text-gray-400 text-xs" id="last-refresh">טוען...</p>
+    </div>
+  </div>
+  <div class="flex items-center gap-3">
+    <span id="loading-dot" class="w-2 h-2 rounded-full bg-indigo-400 hidden pulse-dot"></span>
+    <button onclick="refreshAll()" class="bg-gray-700 hover:bg-gray-600 text-sm px-3 py-1.5 rounded-lg transition">🔄 רענן</button>
+  </div>
+</header>
+
+<!-- Summary Cards -->
+<div class="px-6 py-4 grid grid-cols-3 gap-4" id="summary-cards">
+  <!-- filled by JS -->
+</div>
+
+<!-- Nav Tabs -->
+<nav class="px-6 flex gap-2 mb-4 border-b border-gray-800 pb-0">
+  <button onclick="switchTab('live')" id="tab-live" class="tab-btn px-5 py-2 rounded-t-lg font-bold text-sm transition border-b-2 border-indigo-500 text-indigo-300">🔴 Live</button>
+  <button onclick="switchTab('missed')" id="tab-missed" class="tab-btn px-5 py-2 rounded-t-lg font-bold text-sm transition border-b-2 border-transparent text-gray-400 hover:text-white">📵 לא נענו</button>
+  <button onclick="switchTab('leads')" id="tab-leads" class="tab-btn px-5 py-2 rounded-t-lg font-bold text-sm transition border-b-2 border-transparent text-gray-400 hover:text-white">🌟 לידים</button>
+  <button onclick="switchTab('heatmap')" id="tab-heatmap" class="tab-btn px-5 py-2 rounded-t-lg font-bold text-sm transition border-b-2 border-transparent text-gray-400 hover:text-white">🗺 מפת חום</button>
+  <button onclick="switchTab('settings')" id="tab-settings" class="tab-btn px-5 py-2 rounded-t-lg font-bold text-sm transition border-b-2 border-transparent text-gray-400 hover:text-white">⚙️ הגדרות</button>
+</nav>
+
+<!-- Tab Content -->
+<main class="px-6 pb-10">
+
+  <!-- LIVE TAB -->
+  <div id="tab-live-content">
+    <div class="flex items-center gap-2 mb-3">
+      <span class="w-2 h-2 rounded-full bg-red-500 pulse-dot"></span>
+      <span class="text-sm text-gray-400">מתרענן כל 2 דקות</span>
+    </div>
+    <div class="overflow-x-auto rounded-xl border border-gray-800">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-800 text-gray-400 text-xs uppercase">
+          <tr>
+            <th class="px-4 py-3 text-right">זמן</th>
+            <th class="px-4 py-3 text-right">מספר</th>
+            <th class="px-4 py-3 text-right">מצב</th>
+            <th class="px-4 py-3 text-right">שם לקוח</th>
+            <th class="px-4 py-3 text-right">חיות</th>
+            <th class="px-4 py-3 text-right">ביקור אחרון</th>
+            <th class="px-4 py-3 text-right">משך</th>
+          </tr>
+        </thead>
+        <tbody id="live-table-body" class="divide-y divide-gray-800">
+          <tr><td colspan="7" class="text-center py-6 text-gray-500">טוען...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- MISSED TAB -->
+  <div id="tab-missed-content" class="hidden">
+    <div class="mb-4 bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-gray-300">
+      ℹ️ פורמט ספירה: <b>X-Y</b> → X = לא נענו רשמית, Y = כולל חשד תא-קולי (&lt;49 ש׳). לחץ על כרטיס להיסטוריה.
+    </div>
+
+    <h3 class="text-sm font-bold text-gray-400 mb-2">📅 לפי יום</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div>
+        <h2 class="text-base font-bold text-white mb-3 flex items-baseline gap-2"><span>🔥 היום</span><span id="missed-today-count" class="text-sm font-bold text-amber-400">—</span></h2>
+        <div id="missed-today-list" class="space-y-2"></div>
+      </div>
+      <div>
+        <h2 class="text-base font-bold text-white mb-3 flex items-baseline gap-2"><span>📆 אתמול</span><span id="missed-d1-count" class="text-sm font-bold text-amber-400">—</span></h2>
+        <div id="missed-d1-list" class="space-y-2"></div>
+      </div>
+      <div>
+        <h2 class="text-base font-bold text-white mb-3 flex items-baseline gap-2"><span>📆 שלשום</span><span id="missed-d2-count" class="text-sm font-bold text-amber-400">—</span></h2>
+        <div id="missed-d2-list" class="space-y-2"></div>
+      </div>
+      <div>
+        <h2 class="text-base font-bold text-white mb-3 flex items-baseline gap-2"><span>📆 לפני 3 ימים</span><span id="missed-d3-count" class="text-sm font-bold text-amber-400">—</span></h2>
+        <div id="missed-d3-list" class="space-y-2"></div>
+      </div>
+    </div>
+
+    <h3 class="text-sm font-bold text-gray-400 mb-2">📊 סיכומים</h3>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div>
+        <h2 class="text-base font-bold text-white mb-3 flex items-baseline gap-2"><span>📆 3 ימים אחרונים</span><span id="missed-3d-count" class="text-sm font-bold text-amber-400">—</span></h2>
+        <div id="missed-3d-list" class="space-y-2"></div>
+      </div>
+      <div>
+        <h2 class="text-base font-bold text-white mb-3 flex items-baseline gap-2"><span>📵 השבוע</span><span id="missed-week-count" class="text-sm font-bold text-amber-400">—</span></h2>
+        <div id="missed-week-list" class="space-y-2"></div>
+      </div>
+      <div>
+        <h2 class="text-base font-bold text-white mb-3 flex items-baseline gap-2"><span>📵 החודש</span><span id="missed-month-count" class="text-sm font-bold text-amber-400">—</span></h2>
+        <div id="missed-month-list" class="space-y-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LEADS TAB -->
+  <div id="tab-leads-content" class="hidden">
+    <div class="mb-4 bg-indigo-900/30 border border-indigo-700 rounded-xl p-4 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h2 class="text-lg font-bold text-indigo-300">🌟 פוטנציאל לקוחות חדשים</h2>
+        <p class="text-sm text-indigo-400 mt-1">מספרים שאינם בבסיס הנתונים עם 2+ שיחות שלא נענו ב-30 יום האחרונים</p>
+      </div>
+      <div class="flex gap-2">
+        <button id="leads-sort-recent" onclick="setLeadsSort('recent')" class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold px-4 py-2 rounded-lg transition">🕒 חדש ביותר</button>
+        <button id="leads-sort-hot" onclick="setLeadsSort('hot')" class="bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-semibold px-4 py-2 rounded-lg transition">🔥 חם ביותר</button>
+      </div>
+    </div>
+    <div class="overflow-x-auto rounded-xl border border-gray-800">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-800 text-gray-400 text-xs uppercase">
+          <tr>
+            <th class="px-4 py-3 text-right">#</th>
+            <th class="px-4 py-3 text-right">מספר</th>
+            <th class="px-4 py-3 text-right">שיחות שלא נענו</th>
+            <th class="px-4 py-3 text-right">ראשון (תאריך · יום · שעה)</th>
+            <th class="px-4 py-3 text-right">אחרון (תאריך · יום · שעה)</th>
+          </tr>
+        </thead>
+        <tbody id="leads-table-body" class="divide-y divide-gray-800">
+          <tr><td colspan="5" class="text-center py-6 text-gray-500">טוען...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- HEATMAP TAB -->
+  <div id="tab-heatmap-content" class="hidden">
+    <div class="flex items-start justify-between mb-4 flex-wrap gap-3">
+      <h2 class="text-base font-bold text-white">מפת חום — שיחות לפי יום ושעה (30 יום)</h2>
+      <div class="bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-xs">
+        <div class="text-gray-300 font-bold mb-2">מקרא (עומס לפי שעה)</div>
+        <div class="flex items-center gap-1.5">
+          <span class="text-gray-400">שקט</span>
+          <span class="w-5 h-5 rounded bg-gray-800 border border-gray-700" title="אין שיחות"></span>
+          <span class="w-5 h-5 rounded bg-indigo-900/60" title="1-20% מהשיא"></span>
+          <span class="w-5 h-5 rounded bg-indigo-800" title="20-40%"></span>
+          <span class="w-5 h-5 rounded bg-indigo-700" title="40-60%"></span>
+          <span class="w-5 h-5 rounded bg-indigo-600" title="60-80%"></span>
+          <span class="w-5 h-5 rounded bg-indigo-500" title="80-100% — שיא"></span>
+          <span class="text-gray-400">שיא</span>
+        </div>
+        <div class="text-gray-500 mt-2 leading-relaxed">
+          ככל שהצבע כהה יותר → פחות שיחות<br>
+          ככל שהצבע בהיר יותר → יותר שיחות<br>
+          המספר בתא = כמות שיחות מדויקת<br>
+          ריחוף עכבר → טול-טיפ עם פירוט מלא
+        </div>
+      </div>
+    </div>
+    <div id="heatmap-container" class="overflow-x-auto">
+      <p class="text-gray-500">טוען...</p>
+    </div>
+    <div class="mt-4 text-xs text-gray-500 leading-relaxed">
+      💡 <b>איך לקרוא:</b> כל שורה היא יום בשבוע (א׳ עד ש׳). כל עמודה היא שעה (7:00–20:00).<br>
+      הצבעים מחושבים יחסית לשעה העמוסה ביותר בחודש האחרון — אותה מסומנת בצבע הבהיר ביותר.
+    </div>
+  </div>
+
+</main>
+
+
+  <!-- SETTINGS TAB -->
+  <div id="tab-settings-content" class="hidden">
+
+    <!-- System info card (collapsible) -->
+    <details class="bg-gradient-to-l from-indigo-900/25 to-gray-800 border border-indigo-700/40 rounded-xl mb-6 group">
+      <summary class="cursor-pointer px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <span class="text-2xl">🧠</span>
+          <div>
+            <h2 class="text-base font-bold text-white">איך המערכת עובדת — מפה מלאה</h2>
+            <p class="text-xs text-gray-400 mt-0.5">לחץ לפתיחה · מקורות, לוח זמנים, סיווגים, מגבלות</p>
+          </div>
+        </div>
+        <span class="text-indigo-300 group-open:rotate-90 transition-transform">◄</span>
+      </summary>
+
+      <div class="px-6 pb-5 text-sm text-gray-200 space-y-5">
+
+        <!-- Data sources -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">📡 מקורות נתונים</h3>
+          <ul class="list-disc pr-5 space-y-1 text-gray-300 leading-relaxed">
+            <li><b>VOXIA (PBXware של Bicom)</b> — מרכזיית הטלפון. סטטוס "נענה/לא נענה" מגיע משם ישירות, לא מחושב אצלנו.</li>
+            <li><b>SQLite מקומי</b> (<code class="text-xs bg-gray-900 px-1 rounded">calls.db</code>) — כל שורות ה-CDR, view <code class="text-xs bg-gray-900 px-1 rounded">call_summary</code> שמאחד רגליים לשיחה אחת.</li>
+            <li><b>ClinicaOnline</b> (ASMX API) + <b>Postgres clinicpal</b> — שם לקוח, חיות, ביטוח, ביקור אחרון.</li>
+          </ul>
+        </div>
+
+        <!-- Automations -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">⚙️ אוטומציות (Cron)</h3>
+          <table class="w-full text-xs border-collapse">
+            <thead class="bg-gray-900/60 text-gray-400">
+              <tr><th class="text-right px-2 py-1">מתי</th><th class="text-right px-2 py-1">מה</th><th class="text-right px-2 py-1">תוצאה</th></tr>
+            </thead>
+            <tbody class="text-gray-300">
+              <tr class="border-t border-gray-700"><td class="px-2 py-1 font-mono">*/1</td><td class="px-2 py-1">messenger.py tick</td><td class="px-2 py-1">זיהוי missed + תור לשליחה</td></tr>
+              <tr class="border-t border-gray-700"><td class="px-2 py-1 font-mono">09:00</td><td class="px-2 py-1">drain overnight</td><td class="px-2 py-1">שליחה לסיבוב לילה</td></tr>
+              <tr class="border-t border-gray-700"><td class="px-2 py-1 font-mono">א׳ 03:00</td><td class="px-2 py-1">enrich_callers</td><td class="px-2 py-1">עדכון מתקשרים שבועי</td></tr>
+              <tr class="border-t border-gray-700"><td class="px-2 py-1 font-mono">א׳ 07:00</td><td class="px-2 py-1">weekly_report</td><td class="px-2 py-1">מייל סיכום לנמעני הדוח</td></tr>
+              <tr class="border-t border-gray-700"><td class="px-2 py-1 font-mono">1 לחודש 03:30</td><td class="px-2 py-1">import_insured</td><td class="px-2 py-1">ריענון כל המבוטחים מ-CSV</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Classification -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">🏷️ סיווגי שיחה</h3>
+          <ul class="list-disc pr-5 space-y-1 text-gray-300 leading-relaxed">
+            <li><b>נענה / לא נענה / תפוס</b> — מגיע מ-VOXIA בעמודת status, ללא עריכה.</li>
+            <li><b>📭 חשד תא קולי</b> — מחושב אצלנו: <code class="bg-gray-900 px-1 rounded">status=Answered AND total_sec &lt; סף</code>. הסף ניתן לשינוי למעלה בהגדרות.</li>
+            <li><b>אבודה לחלוטין</b> — לא נענתה ולא חזרה להתקשר תוך 6 שעות.</li>
+            <li><b>לקוח לא מזוהה / ליד</b> — טלפון שלא נמצא ב-Postgres clients.</li>
+          </ul>
+        </div>
+
+        <!-- Dashboard tabs -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">📊 לשוניות הדשבורד</h3>
+          <ul class="list-disc pr-5 space-y-1 text-gray-300 leading-relaxed">
+            <li><b>Live</b> — שיחות היום (מתרענן כל 2 דק׳).</li>
+            <li><b>לא נענו</b> — 7 טורים: היום, אתמול, שלשום, לפני 3 ימים, 3 ימים, שבוע, חודש. כל טור עם ספירה <code>X-Y</code> (X=רשמי, Y=כולל חשד).</li>
+            <li><b>לידים</b> — מספרים שאינם במערכת עם 2+ missed. מיון: חדש ביותר / חם ביותר.</li>
+            <li><b>מפת חום</b> — עומס שעה×יום (30 יום), צבעי indigo יחסיים לשיא.</li>
+            <li><b>הגדרות</b> — תבניות, דוחות, סף חשד.</li>
+          </ul>
+        </div>
+
+        <!-- Safety / Dedup -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">🛡 חוקי בטיחות לשליחה</h3>
+          <ul class="list-disc pr-5 space-y-1 text-gray-300 leading-relaxed">
+            <li>סינון אוטומטי של שלוחות פנימיות: 501 (Balfour), 502 (Bar-Ilan), 600 (Office), 305 (NA Ramat Hanasi), וטרנק 035513649.</li>
+            <li>רק מספרים חיצוניים (רגקס: מתחיל ב-0 + 8-10 ספרות).</li>
+            <li>לא שולחים פעמיים לאותו מספר באותו יום.</li>
+            <li>לא שולחים אם הלקוח חזר והתקשר ונענה תוך 5 דק׳.</li>
+            <li>אם חזר ושוב לא נענה → הטיימר מתאפס, ממתין עוד 5 דק׳ מהשיחה החדשה.</li>
+            <li>Rate limit: 30-90 ש׳ בין הודעות, cap 150 הודעות ליום.</li>
+            <li>מספר שולח: <b>035513649</b> דרך Green API (הטאבלט 0552916466 חסום).</li>
+          </ul>
+        </div>
+
+        <!-- Clinic hours -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">🕐 שעות פעילות</h3>
+          <ul class="list-disc pr-5 space-y-1 text-gray-300 leading-relaxed">
+            <li>א׳–ה׳: 10:00–20:00</li>
+            <li>ו׳: 09:00–14:00</li>
+            <li>שבת: סגור</li>
+            <li>שיחה בשעות פתוחות → שליחת <b>טקסט יום</b> תוך 3 דק׳.</li>
+            <li>שיחה בשעות סגורות → תור ל-09:00 למחרת → <b>טקסט לילה ארוך</b> + אחרי 5 שניות <b>טקסט בוקר חם</b>.</li>
+          </ul>
+        </div>
+
+        <!-- Enrichment chain -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">🔗 שרשרת העשרה (שם/חיה/ביטוח)</h3>
+          <ol class="list-decimal pr-5 space-y-1 text-gray-300 leading-relaxed">
+            <li>שיחה נכנסת → נורמול טלפון לספרות בלבד.</li>
+            <li>חיפוש ב-Postgres <code>clients</code> (lookup cached 30 ש׳).</li>
+            <li>מציאת חיות דרך FK ל-<code>pets</code>, כולל שם, סוג, גזע, ביטוח.</li>
+            <li>נורמול שם ביטוח (BeFriend לכל הוריאציות, פניקס→הפניקס).</li>
+            <li>הצגה כ-chips בכרטיס השיחה.</li>
+          </ol>
+        </div>
+
+        <!-- Weekly report -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">📧 דוח שבועי</h3>
+          <p class="text-gray-300 leading-relaxed">נשלח יום א׳ בבוקר למיילים המוגדרים למעלה. כולל סטטיסטיקות, 10 מספרים שהכי לא נענו, והפסד משוער.</p>
+        </div>
+
+        <!-- Limitations -->
+        <div>
+          <h3 class="text-amber-400 font-bold mb-2">⚠️ מגבלות וסיכונים</h3>
+          <ul class="list-disc pr-5 space-y-1 text-gray-300 leading-relaxed">
+            <li><b>"חשד תא קולי"</b> הוא הערכה — שיחה קצרה יכולה להיות גם "מצטער, לא עכשיו". הסף ניתן לשינוי.</li>
+            <li><b>כיסוי ביטוח</b> תלוי בייבוא חודשי + העשרה שבועית. לקוח חדש יכול להופיע באיחור.</li>
+            <li><b>VOXIA API</b> — אין לנו Admin Keys, רק session scraping. אם הם ישנו את ה-UI, הסנכרון עלול להישבר.</li>
+            <li><b>Telephony events</b> בזמן אמת — לא קיימים אצלנו (אין webhooks מ-VOXIA). ההקדמה המינימלית לזיהוי שיחה היא ~60 ש׳.</li>
+          </ul>
+        </div>
+
+        <!-- URLs & access -->
+        <div>
+          <h3 class="text-indigo-300 font-bold mb-2">🌐 גישה</h3>
+          <ul class="list-disc pr-5 space-y-1 text-gray-300 leading-relaxed">
+            <li>דשבורד: <code>http://167.86.69.208:3005/</code> · PIN 2306</li>
+            <li>VOXIA פורטל: <code>https://vetbatyam.voxianetworks.com/</code></li>
+            <li>שרת: Contabo VPS 167.86.69.208</li>
+            <li>נתיב הקוד: <code>/home/claude-user/clinic-agents/missed-caller/</code></li>
+          </ul>
+        </div>
+
+      </div>
+    </details>
+
+    <!-- Rules summary -->
+    <div class="bg-gradient-to-l from-indigo-900/40 to-gray-800 border border-indigo-700/50 rounded-xl p-6 mb-6">
+      <h2 class="text-base font-bold text-white mb-3">📋 כללי המערכת — מתי כל טקסט נשלח</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-200">
+        <div class="bg-gray-800/60 rounded-lg p-3 border border-gray-700">
+          <div class="font-bold text-indigo-300 mb-1">🕐 שעות פעילות המרפאה</div>
+          <div class="text-gray-300 leading-relaxed">
+            א׳–ה׳: 10:00–20:00<br>
+            ו׳: 09:00–14:00<br>
+            ש׳: סגור
+          </div>
+        </div>
+        <div class="bg-gray-800/60 rounded-lg p-3 border border-gray-700">
+          <div class="font-bold text-indigo-300 mb-1">📱 מספר שולח</div>
+          <div class="text-gray-300 leading-relaxed">
+            035513649 — Green API של המרפאה<br>
+            <span class="text-xs text-gray-500">(לא מהטאבלט 0552916466 — חסום)</span>
+          </div>
+        </div>
+        <div class="bg-gray-800/60 rounded-lg p-3 border border-gray-700">
+          <div class="font-bold text-green-400 mb-1">🌞 שיחה שלא נענתה בשעות פעילות</div>
+          <div class="text-gray-300 leading-relaxed text-xs">
+            המתן 3 דק׳ (אולי חזרנו) →<br>
+            שלח את <b>טקסט יום</b>.
+          </div>
+        </div>
+        <div class="bg-gray-800/60 rounded-lg p-3 border border-gray-700">
+          <div class="font-bold text-orange-400 mb-1">🌙 שיחה בשעות סגורות</div>
+          <div class="text-gray-300 leading-relaxed text-xs">
+            תור עד 09:00 למחרת →<br>
+            שלח <b>טקסט לילה ארוך</b> +<br>
+            אחרי 5 שניות שלח <b>טקסט בוקר חם</b>.
+          </div>
+        </div>
+        <div class="bg-gray-800/60 rounded-lg p-3 border border-gray-700 md:col-span-2">
+          <div class="font-bold text-yellow-400 mb-1">🛡 חוקי בטיחות</div>
+          <div class="text-gray-300 leading-relaxed text-xs">
+            • לא שולחים לאותו מספר פעמיים באותו יום<br>
+            • לא שולחים אם הלקוח חזר והתקשר תוך 5 דק׳ (הסתדר בעצמו)<br>
+            • סינון מספרים פנימיים אוטומטי (501/502/600/305 וטרנק 035513649)<br>
+            • קאפ של 150 שליחות ליום • השהיה 30–90 שניות בין הודעות (אנטי-חסימה)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="settings-toast" class="hidden fixed top-4 right-4 z-50 bg-green-600 text-white text-sm font-bold px-4 py-2 rounded-full shadow-lg transition-all">נשמר ✓</div>
+
+    <!-- Section 1: Reports -->
+    <div class="bg-gray-800 border border-gray-700 rounded-xl p-6 mb-6">
+      <h2 class="text-base font-bold text-white mb-4">📧 דוחות שבועיים</h2>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-gray-400 text-sm mb-1">נמעני המייל (פסיקים)</label>
+          <input type="text" id="setting-report_recipients" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-400" placeholder="email1@example.com, email2@example.com" />
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="flex-1">
+            <label class="block text-gray-400 text-sm mb-1">יום שליחה <span class="text-yellow-400 text-xs">(לצפייה בלבד — שנה cron בטרמינל)</span></label>
+            <select id="setting-report_day_of_week" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-400" disabled>
+              <option value="0">יום ראשון</option>
+              <option value="1">יום שני</option>
+              <option value="2">יום שלישי</option>
+              <option value="3">יום רביעי</option>
+              <option value="4">יום חמישי</option>
+              <option value="5">יום שישי</option>
+              <option value="6">שבת</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-gray-400 text-sm mb-1">שעת שליחה <span class="text-yellow-400 text-xs">(לצפייה בלבד)</span></label>
+            <input type="number" id="setting-report_hour" min="0" max="23" class="w-24 bg-gray-600 border border-gray-500 text-gray-400 rounded-lg px-3 py-2 text-sm cursor-not-allowed" disabled />
+          </div>
+          <div class="flex items-center gap-2 pt-5">
+            <input type="checkbox" id="setting-report_enabled" class="w-4 h-4 accent-indigo-500" />
+            <label for="setting-report_enabled" class="text-gray-300 text-sm">דוח שבועי פעיל</label>
+          </div>
+        </div>
+        <p class="text-yellow-500 text-xs">⚠️ שינוי יום/שעה דורש עדכון ידני של cron (crontab -e)</p>
+      </div>
+    </div>
+
+    <!-- Section 2: Templates -->
+    <div class="bg-gray-800 border border-gray-700 rounded-xl p-6 mb-6">
+      <h2 class="text-base font-bold text-white mb-4">💬 תבניות הודעות WhatsApp</h2>
+      <div class="space-y-5">
+        <div class="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 mb-4">
+          <div class="flex items-center gap-3 mb-3">
+            <label class="text-amber-200 text-sm font-semibold" for="setting-voicemail_threshold_sec">
+              📭 סף חשד לתא קולי (שניות):
+            </label>
+            <input type="number" id="setting-voicemail_threshold_sec" min="5" max="180" step="1"
+              class="w-20 bg-gray-700 border border-amber-600 rounded px-2 py-1 text-white text-sm text-center" />
+            <span class="text-xs text-gray-400">(שיחות שנענו קצרות מזה → חשודות)</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <input type="checkbox" id="setting-count_voicemail_as_missed" class="w-4 h-4 accent-amber-500" />
+            <label for="setting-count_voicemail_as_missed" class="text-amber-200 text-sm font-semibold cursor-pointer">
+              📭 החשב שיחות קצרות (&lt;49 ש׳) כ"לא נענו" בספירות
+            </label>
+          </div>
+          <p class="text-gray-400 text-xs mt-2 leading-relaxed">
+            כשהאפשרות פעילה: שיחות ש-PBXware סימן כ"נענו" אבל נמשכו פחות מ-15 שניות (ככל הנראה תא-קולי / IVR / ניתוק מהיר) ייחשבו כ"לא נענו" בסטטיסטיקות ובאחוזי המענה. ~10% מהשיחות ב-30 ימים האחרונים נופלות בקטגוריה זו.
+          </p>
+        </div>
+        <div>
+          <label class="block text-indigo-300 text-sm font-bold mb-1">🌞 טקסט יום (warm_open)</label>
+          <p class="text-gray-500 text-xs mb-2">נשלח בשעות פעילות, כ~3 דק׳ אחרי שיחה שלא נענתה</p>
+          <textarea id="setting-template_warm_open" rows="4" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-400 resize-y" dir="rtl" placeholder="היי! ראיתי שהתקשרת..."></textarea>
+        </div>
+        <div>
+          <label class="block text-indigo-300 text-sm font-bold mb-1">🌙 טקסט לילה ארוך (overnight_long)</label>
+          <p class="text-gray-500 text-xs mb-2">נשלח בבוקר למחר עבור שיחות בשעות סגורות, חלק 1 עם מרכזי חירום</p>
+          <textarea id="setting-template_overnight_long" rows="8" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-400 resize-y" dir="rtl"></textarea>
+        </div>
+        <div>
+          <label class="block text-indigo-300 text-sm font-bold mb-1">☀️ טקסט בוקר חם (overnight_morning)</label>
+          <p class="text-gray-500 text-xs mb-2">נשלח אחרי הטקסט הארוך, פולואופ-אפ חם</p>
+          <textarea id="setting-template_overnight_morning" rows="4" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-400 resize-y" dir="rtl"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <button onclick="saveSettings()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl transition text-base">
+      💾 שמור הגדרות
+    </button>
+  </div>
+
+<!-- Modal: Client History -->
+<div id="modal-overlay" class="fixed inset-0 bg-black/70 z-50 hidden flex items-center justify-center p-4" onclick="closeModal(event)">
+  <div class="bg-gray-900 rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col border border-gray-700 shadow-2xl" onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-700">
+      <div>
+        <h3 class="font-bold text-white text-lg" id="modal-title">היסטוריית שיחות</h3>
+        <p class="text-gray-400 text-sm" id="modal-subtitle"></p>
+      </div>
+      <button onclick="document.getElementById('modal-overlay').classList.add('hidden')" class="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
+    </div>
+    <div class="overflow-y-auto p-6 flex-1">
+      <div id="modal-content"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js?v=1776965547"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# secrets
+.env
+*.env
+
+# runtime / state
+calls.db
+calls.db-*
+logs/
+*.log
+.venv/
+__pycache__/
+*.pyc
+
+# tmux, tmp
+.DS_Store
